@@ -5,7 +5,7 @@ import torch
 import torchvision
 from bbox_transform import bbox_offset, absolute_to_relative_bbox
 from config_experiments import config
-from torchvision.transforms import transforms
+import torchvision
 
 
 class VOC08Attr(Dataset):
@@ -78,13 +78,19 @@ class VOC08Attr(Dataset):
         loaded_tensor_list = [list_sample_roi[key] for key in list_sample_roi.keys()]
         return loaded_tensor_list
 
-    def apply_horizontal_flip(self, image, gt_bbox, ss_rois):
-        if torch.rand(1) < 0.5:
-            image = transforms.functional.hflip(image)
-            W = image.width
-            gt_bbox[:, [0, 2]] = W - gt_bbox[:, [2, 0]]  # xmin, xmax
-            ss_rois[:, [0, 2]] = W - ss_rois[:, [2, 0]]  # xmin, xmax
+    def random_horizontal_flip_with_boxes(self, image, gt_bbox, ss_rois, p=0.5):
+        if torch.rand(1) < p:
+            image = torchvision.transforms.functional.hflip(image)
+            gt_bbox = self.flip_boxes(gt_bbox, 1)
+            ss_rois = self.flip_boxes(ss_rois, 1)
+
         return image, gt_bbox, ss_rois
+
+    def flip_boxes(self, boxes, image_width):
+        flipped_boxes = boxes.clone()
+        flipped_boxes[:, 0] = image_width - boxes[:, 2]
+        flipped_boxes[:, 2] = image_width - boxes[:, 0]
+        return flipped_boxes
 
     def __getitem__(self, idx):
         img_path = self.images_names[idx]
@@ -98,15 +104,16 @@ class VOC08Attr(Dataset):
         )
         ss_rois = self.ss_rois[idx]
         if self.transform:
-            image, gt_bbox, ss_rois = self.apply_horizontal_flip(
-                image, gt_bbox, ss_rois
-            )
             image = self.transform(image)
             # gt_bbox absolute to relative rispetto alla dimensione originale dell'immagine
             # ss_rois absolute to relative rispetto alla dimensione originale dell'immagine
             gt_bbox = absolute_to_relative_bbox(gt_bbox, img_size)
             ss_rois = absolute_to_relative_bbox(ss_rois, img_size)
-        return image, gt_class, gt_bbox, gt_attributes, ss_rois
+            if self.train:
+                image, gt_bbox, ss_rois = self.random_horizontal_flip_with_boxes(
+                    image, gt_bbox, ss_rois
+                )
+        return image, img_size, gt_class, gt_bbox, gt_attributes, ss_rois
 
 
 def extract_positive_and_negative(gt_class, gt_bbox, gt_attributes, ss_rois):
@@ -144,7 +151,7 @@ def extract_positive_and_negative(gt_class, gt_bbox, gt_attributes, ss_rois):
 
 
 def collate_fn(batch):
-    images, gt_class, gt_bbox, gt_attributes, ss_rois = zip(*batch)
+    images, _, gt_class, gt_bbox, gt_attributes, ss_rois = zip(*batch)
 
     images = torch.stack(images, dim=0)
     rois = []
@@ -182,7 +189,7 @@ def collate_fn(batch):
         config["preprocessing"]["n_images"]
         * config["preprocessing"]["n_roi_per_image"]
         * config["preprocessing"]["ratio_pos_roi"]
-    )
+    ) # positive roi
     n_neg = (
         config["preprocessing"]["n_images"] * config["preprocessing"]["n_roi_per_image"]
         - n_pos
@@ -190,10 +197,10 @@ def collate_fn(batch):
 
     pos_selected = pos_indices[
         torch.randperm(len(pos_indices))[:n_pos]
-    ]  # TODO rimuovi il seed per l'esecuzione sennò selezioni sempre gli stessi
+    ]
     neg_selected = neg_indices[
         torch.randperm(len(neg_indices))[:n_neg]
-    ]  # TODO rimuovi il seed per l'esecuzione sennò selezioni sempre gli stessi
+    ] 
 
     selected = torch.cat([pos_selected, neg_selected])
 
@@ -204,3 +211,11 @@ def collate_fn(batch):
     indices_batch = indices_batch[selected].unsqueeze(-1)
 
     return images, rois, classes, offsets, attrs, indices_batch
+
+def get_indices_batch(n_images, n_roi_per_image):
+    batches = []
+    for i in range(n_images):
+        current_batch = torch.full((n_roi_per_image,), fill_value=i)
+        batches.append(current_batch)
+    indices_batch = torch.cat(batches)
+    return indices_batch

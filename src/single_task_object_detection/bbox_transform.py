@@ -103,45 +103,6 @@ def regr_to_bbox(proposals, regr, image_size):
     return pred_bbox
 
 
-"""
-def apply_nms(cls_max_score, max_score, bboxs):
-
-    res_bbox = []
-    res_cls = []
-    res_scores = []
-    for c in range(
-        1, config["global"]["num_classes"] + 1
-    ):  # nms per classe indipendente
-        c_mask = cls_max_score == c
-        c_bboxs = bboxs[c_mask]
-        c_score = max_score[c_mask]
-
-        if len(c_bboxs) > 0:
-            nms_idxs = torchvision.ops.nms(
-                c_bboxs,
-                c_score,
-                iou_threshold=config["postprocessing"]["iou_threshold"],
-            )
-            # Limiting to top 100 detections per class
-            nms_idxs = nms_idxs[: config["postprocessing"]["max_roi_per_image"]]
-
-            res_bbox.extend(c_bboxs[nms_idxs])
-            res_cls.extend(torch.tensor([c] * len(nms_idxs)))
-            res_scores.extend(c_score[nms_idxs])
-
-    if res_bbox:
-        res_bbox = torch.cat([bbox.view(-1, 4) for bbox in res_bbox], dim=0)
-        res_cls = torch.cat([classe.view(1) for classe in res_cls], dim=0)
-        res_scores = torch.cat([score.view(1) for score in res_scores], dim=0)
-
-    else:  # res_bbox empty list
-        res_bbox = torch.tensor(res_bbox)
-        res_cls = torch.tensor(res_cls)
-        res_scores = torch.tensor(res_scores)
-    return res_bbox, res_cls, res_scores
-"""
-
-
 def apply_nms(cls_max_score, max_score, bboxs):
 
     res_bbox_list = []

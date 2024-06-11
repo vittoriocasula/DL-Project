@@ -14,7 +14,6 @@ import datetime
 import logging
 
 
-
 def train(data_loader, model, optimizer, device):
     model.train()
 
@@ -26,6 +25,7 @@ def train(data_loader, model, optimizer, device):
     for i, (image, train_roi, train_cls, train_offset, _, indices_batch) in enumerate(
         data_loader
     ):
+
         image = image.to(device)
         train_roi = train_roi.to(device)
         train_cls = train_cls.to(device)
@@ -48,6 +48,13 @@ def train(data_loader, model, optimizer, device):
         losses_cls.append(loss_cls)
         losses_loc.append(loss_loc)
 
+        wandb.log(
+            {
+                "loss": total_loss.item(),
+                "loss_cls": loss_cls.item(),
+                "loss_loc": loss_loc.item(),
+            }
+        )
         # Updating tqdm description with loss values
         data_loader.set_postfix(
             {
@@ -95,6 +102,13 @@ def eval(data_loader, model, device):
             losses_cls.append(loss_cls)
             losses_loc.append(loss_loc)
 
+            wandb.log(
+                {
+                    "loss": total_loss.item(),
+                    "loss_cls": loss_cls.item(),
+                    "loss_loc": loss_loc.item(),
+                }
+            )
             # Updating tqdm description with loss values
             data_loader.set_postfix(
                 {
@@ -109,127 +123,144 @@ def eval(data_loader, model, device):
         torch.mean(torch.tensor(losses_loc)).item(),
     )
 
+if __name__ == "__main__": 
 
-set_seed(config["reproducibility"]["seed"])
-device = set_device(config["device"]["gpu_id"])
+    set_seed(config["reproducibility"]["seed"])
+    device = set_device(config["device"]["gpu_id"])
 
-current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-model_name = f"model_{current_time}"
-
-
-logging.basicConfig(filename=f'./outputs/{current_time}.log', level=logging.INFO, 
-                    format='%(asctime)s:%(levelname)s:%(message)s ')
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+    model_name = f"model_{current_time}"
 
 
-wandb.init(
-    group="object_detection",
-    project="DL",
-    config=config,
-    save_code=True,
-    # mode="disabled",
-)
-
-transform_train = transforms.Compose(
-    [
-        transforms.Resize(size=config["transform"]["resize_values"]),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=config["transform"]["mean"], std=config["transform"]["std"]
-        ),
-        transforms.RandomHorizontalFlip(p=0.5)
-    ]
-)
-
-transform_val = transforms.Compose(
-    [
-        transforms.Resize(size=config["transform"]["resize_values"]),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=config["transform"]["mean"], std=config["transform"]["std"]
-        ),
-    ]
-)
-# dataset & dataloader
-
-train_data = VOC08Attr(train=True, transform=transform_train)
-val_data = VOC08Attr(train=False, transform=transform_train)
-
-
-train_dataloader = DataLoader(
-    train_data, batch_size=config["preprocessing"]["n_images"], collate_fn=collate_fn
-)
-val_dataloader = DataLoader(
-    val_data, batch_size=config["preprocessing"]["n_images"], collate_fn=collate_fn
-)
-
-# model
-model = ObjectDetectionModel().to(device)
-# optimizer
-params = []
-for name, param in model.named_parameters():
-    if "weight" in name:
-        params.append({"params": param, "lr": config["optimizer"]["lr_global"]})
-    elif "bias" in name:
-        params.append({"params": param, "lr": config["optimizer"]["lr_global"] * 2})
-
-
-optimizer = torch.optim.SGD(
-    params,
-    lr=config["optimizer"]["lr_global"],
-    momentum=config["optimizer"]["momentum"],
-    weight_decay=config["optimizer"]["weight_decay"],
-)
-
-# training loop
-best_mAP = 0.0
-best_mAP_dict = {}
-best_epoch = 0
-sched = torch.optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
-
-for epoch in range(config["training_loop"]["num_epochs"]):
-    train_loss_total, train_loss_class, train_loss_loc = train(
-        train_dataloader, model, optimizer, device
+    logging.basicConfig(
+        filename=f"./outputs/{current_time}.log",
+        level=logging.INFO,
+        format="%(asctime)s:%(levelname)s:%(message)s ",
     )
-    mAP_train_dict = compute_mAP(train_data, model, device)  # mAP on train
-    val_loss_total, val_loss_class, val_loss_loc = eval(val_dataloader, model, device)
-    mAP_val_dict = compute_mAP(val_data, model, device)  # mAP on train
 
-    mAP_train = mAP_train_dict["map_50"].item()
-    mAP_val = mAP_val_dict["map_50"].item()
-
-    logging.info(
-        f"[Epoch {epoch+1}]\tTrain:\tTotal loss train= {train_loss_total:.4f} loss_cls = {train_loss_class:.4f} loss_loc = {train_loss_loc:.4f} \tVal:\ttotal loss val= {val_loss_total:.4f} loss_cls = {val_loss_class:.4f} loss_loc = {val_loss_loc:.4f} \t mAP_train: { mAP_train:.2f} mAP_val: {mAP_val:.2f}\n"
+    wandb.init(
+        group="object_detection",
+        project="DL",
+        config=config,
+        save_code=True,
+        # mode="disabled",
     )
-    wandb.log(
-        {
-            "epoch": epoch + 1,
-            "loss training": train_loss_total,
-            "loss validation": val_loss_total,
-            "loss classification training": train_loss_class,
-            "loss classification validation": val_loss_class,
-            "loss location training": train_loss_loc,
-            "loss location validation": val_loss_loc,
-            "mAP_train": mAP_train,
-            "mAP_val": mAP_val,
-        }
+
+    transform_train = transforms.Compose(
+        [
+            transforms.Resize(size=config["transform"]["resize_values"]),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=config["transform"]["mean"], std=config["transform"]["std"]
+            ),
+        ]
     )
-    sched.step()
 
-    if mAP_val > best_mAP:
-        best_model_weights = model.state_dict()
-        best_epoch = epoch + 1
-        best_mAP = mAP_val
-        best_mAP_dict = mAP_val_dict
+    transform_val = transforms.Compose(
+        [
+            transforms.Resize(size=config["transform"]["resize_values"]),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=config["transform"]["mean"], std=config["transform"]["std"]
+            ),
+        ]
+    )
+    # dataset & dataloader
 
-logging.info(f"Best model found at epoch {best_epoch}")
-wandb.config.update({"best_epoch": best_epoch})
+    train_data = VOC08Attr(train=True, transform=transform_train)
+    val_data = VOC08Attr(train=False, transform=transform_val)
 
-# storage model
 
-path_models = "./models/object_detection/"
-os.makedirs(path_models, exist_ok=True)
-torch.save(best_model_weights, path_models + model_name + ".pth")
+    train_dataloader = DataLoader(
+        train_data, batch_size=config["preprocessing"]["n_images"], collate_fn=collate_fn
+    )
+    val_dataloader = DataLoader(
+        val_data, batch_size=config["preprocessing"]["n_images"], collate_fn=collate_fn
+    )
 
-view_mAP_for_class(best_mAP_dict, val_data)
+    # model
+    model = ObjectDetectionModel().to(device)
+    # optimizer
+    params = []
+    for name, param in model.named_parameters():
+        if "weight" in name:
+            params.append(
+                {
+                    "params": param,
+                    "lr": config["optimizer"]["lr_global"]
+                    * config["optimizer"]["lr_weigth_mult"],
+                }
+            )
+        elif "bias" in name:
+            params.append(
+                {
+                    "params": param,
+                    "lr": config["optimizer"]["lr_global"]
+                    * config["optimizer"]["lr_bias_bias"],
+                }
+            )
 
-wandb.finish()
+    optimizer = torch.optim.SGD(
+        params,
+        lr=config["optimizer"]["lr_global"],
+        momentum=config["optimizer"]["momentum"],
+        weight_decay=config["optimizer"]["weight_decay"],
+    )
+
+    # training loop
+    best_mAP = 0.0
+    best_mAP_dict = {}
+    best_epoch = 0
+    sched = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=config["optimizer"]["sched_step_size"],
+        gamma=config["optimizer"]["sched_gamma"],
+    )
+
+    for epoch in range(config["training_loop"]["num_epochs"]):
+        train_loss_total, train_loss_class, train_loss_loc = train(
+            train_dataloader, model, optimizer, device
+        )
+        mAP_train_dict = compute_mAP(train_data, model, device)  # mAP on train
+        val_loss_total, val_loss_class, val_loss_loc = eval(val_dataloader, model, device)
+        mAP_val_dict = compute_mAP(val_data, model, device)  # mAP on val
+
+        mAP_train = mAP_train_dict["map_50"].item()
+        mAP_val = mAP_val_dict["map_50"].item()
+
+        logging.info(
+            f"[Epoch {epoch+1}]\tTRAIN: total_loss = {train_loss_total:.4f} loss_cls = {train_loss_class:.4f} loss_loc = {train_loss_loc:.4f} \tVAL: total_loss val= {val_loss_total:.4f} loss_cls = {val_loss_class:.4f} loss_loc = {val_loss_loc:.4f} \t mAP_train: {mAP_train*100:.2f} mAP_val: {mAP_val*100:.2f}"
+        )
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "loss training": train_loss_total,
+                "loss validation": val_loss_total,
+                "loss classification training": train_loss_class,
+                "loss classification validation": val_loss_class,
+                "loss location training": train_loss_loc,
+                "loss location validation": val_loss_loc,
+                "mAP_train": mAP_train,
+                "mAP_val": mAP_val,
+            }
+        )
+        sched.step()
+
+        if mAP_val > best_mAP:
+            best_model_weights = model.state_dict()
+            best_epoch = epoch + 1
+            best_mAP = mAP_val
+            best_mAP_dict = mAP_val_dict
+
+    logging.info(f"Best model found at epoch {best_epoch}")
+    wandb.config.update({"best_epoch": best_epoch})
+
+    # storage model
+
+    path_models = "./models/object_detection/"
+    os.makedirs(path_models, exist_ok=True)
+    torch.save(best_model_weights, path_models + model_name + ".pth")
+
+    view_mAP_for_class(best_mAP_dict, val_data)
+
+    wandb.finish()

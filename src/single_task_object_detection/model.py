@@ -21,18 +21,22 @@ class ROI_Module(nn.Module):
         super(ROI_Module, self).__init__()
 
         self.roipool = torchvision.ops.RoIPool(
-            output_size=(6, 6), spatial_scale=config["model"]["spatial_scale"]
+            output_size=config["model"]["out_size_roi_pool"],
+            spatial_scale=config["model"]["spatial_scale"],
         )
 
         self.feature = nn.Sequential(
-            *[
-                layer
-                for layer in list(
-                    torchvision.models.alexnet(
-                        weights=AlexNet_Weights.DEFAULT
-                    ).classifier.children()
-                )[:-1]
-            ]
+            nn.Dropout(),
+            nn.Linear(
+                256
+                * config["model"]["out_size_roi_pool"][0]
+                * config["model"]["out_size_roi_pool"][1],
+                4096,
+            ),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, features, rois, ridx):
@@ -96,14 +100,16 @@ class ObjectDetectionModel(nn.Module):
     def calc_loss(
         self,
         probs,
-        bbox,  # offset calcolati in base alle roi assolute
+        bbox,
         labels,
-        gt_bbox,  # offset gt relativi
+        gt_bbox,
     ):
         cel = nn.CrossEntropyLoss()
         sl1 = nn.SmoothL1Loss()
         loss_sc = cel(probs, labels)
-        lbl = labels.view(-1, 1, 1).expand(labels.size(0), 1, 4)
+        lbl = labels.view(-1, 1, 1).expand(
+            labels.size(0), 1, 4
+        )  # view --> 128,1,1 expand --> 128, 1, 4
         # ignore background
         mask = (labels != 0).float().view(-1, 1).expand(labels.size(0), 4)
         loss_loc = sl1(bbox.gather(1, lbl).squeeze(1) * mask, gt_bbox * mask)

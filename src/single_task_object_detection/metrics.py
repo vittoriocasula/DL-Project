@@ -1,20 +1,21 @@
 import torch
 from config_experiments import config
-from utils import get_indices_batch
-from bbox_transform import relative_to_absolute_bbox
+from dataloader import get_indices_batch
+from bbox_transform import relative_to_absolute_bbox, absolute_to_relative_bbox
 import torchmetrics
 from bbox_transform import apply_nms
 from tqdm import tqdm
 import wandb
 import logging
 
-def compute_mAP(data_set, model, device): #train/val
+
+def compute_mAP(data_set, model, device):  # train/val
 
     metric = torchmetrics.detection.MeanAveragePrecision(
         iou_type="bbox",
         class_metrics=True,
         iou_thresholds=[0.5],
-        max_detection_thresholds=[10, 100, 500],
+        max_detection_thresholds=[10, 100, 500]
     ).to(device)
     metric.warn_on_many_detections = False
     model.eval()
@@ -23,15 +24,18 @@ def compute_mAP(data_set, model, device): #train/val
     with torch.no_grad():
 
         for i, (
-            image, gt_class, gt_bbox, gt_attributes, ss_rois
+            image,
+            image_size,
+            gt_class,
+            gt_bbox,
+            gt_attributes,
+            ss_rois,
         ) in enumerate(data_set):
             image = image.unsqueeze(0).to(device)
             gt_class = gt_class.to(device)
             gt_bbox = gt_bbox.to(device)
             ss_rois = ss_rois.to(device)
-            gt_bbox = relative_to_absolute_bbox(
-                gt_bbox, config["transform"]["resize_values"]
-            )
+            gt_bbox = relative_to_absolute_bbox(gt_bbox, image_size)
             ss_rois = relative_to_absolute_bbox(
                 ss_rois, config["transform"]["resize_values"]
             )
@@ -45,6 +49,12 @@ def compute_mAP(data_set, model, device): #train/val
             cls_max_score, max_score, bboxs = model.prediction_img(
                 image, ss_rois, indices_batch
             )
+
+            bboxs = absolute_to_relative_bbox(
+                bboxs, config["transform"]["resize_values"]
+            )
+            bboxs = relative_to_absolute_bbox(bboxs, image_size)
+
             pred_bbox, pred_class, pred_score = apply_nms(
                 cls_max_score, max_score, bboxs
             )

@@ -3,6 +3,8 @@ models/
 outputs/
 selectivesearch/
 wandb/
+src/single_task_object_detection/model_obj.onnx
+src/single_task_object_detection/wandb/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
