@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import random
-
+import logging
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -21,3 +21,9 @@ def set_device(idx_gpu=0):
         device = torch.device("cpu")
     return device
 
+def log_dict(d, parent_key=''):
+    for key, value in d.items():
+        if isinstance(value, dict):
+            log_dict(value, f'{parent_key}{key}.')
+        else:
+            logging.info(f'{parent_key}{key}: {value}')

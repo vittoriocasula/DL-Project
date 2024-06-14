@@ -151,9 +151,23 @@ def extract_positive_and_negative(gt_class, gt_bbox, gt_attributes, ss_rois):
 
 
 def collate_fn(batch):
-    images, _, gt_class, gt_bbox, gt_attributes, ss_rois = zip(*batch)
+    images, img_size_original, gt_class, gt_bbox, gt_attributes, ss_rois = zip(
+        *batch
+    )  # img_size sono originali= (W,H)
 
-    images = torch.stack(images, dim=0)
+    image_shapes = [
+        img.shape for img in images
+    ]  # considero le dimensioni dopo aver effettuato il resize per mantenere l'aspect ratio
+    max_height = max(shape[1] for shape in image_shapes)  # max heigth
+    max_width = max(shape[2] for shape in image_shapes)  # max width
+
+    batch_images = torch.zeros(
+        size=(len(images), images[0].shape[0], max_height, max_width)
+    )
+    for i, img in enumerate(images):
+        _, height, width = img.shape
+        batch_images[i, :, :height, :width] = img
+
     rois = []
     classes = []
     offsets = []
@@ -189,18 +203,14 @@ def collate_fn(batch):
         config["preprocessing"]["n_images"]
         * config["preprocessing"]["n_roi_per_image"]
         * config["preprocessing"]["ratio_pos_roi"]
-    ) # positive roi
+    )  # positive roi
     n_neg = (
         config["preprocessing"]["n_images"] * config["preprocessing"]["n_roi_per_image"]
         - n_pos
     )  # negative roi
 
-    pos_selected = pos_indices[
-        torch.randperm(len(pos_indices))[:n_pos]
-    ]
-    neg_selected = neg_indices[
-        torch.randperm(len(neg_indices))[:n_neg]
-    ] 
+    pos_selected = pos_indices[torch.randperm(len(pos_indices))[:n_pos]]
+    neg_selected = neg_indices[torch.randperm(len(neg_indices))[:n_neg]]
 
     selected = torch.cat([pos_selected, neg_selected])
 
@@ -210,7 +220,8 @@ def collate_fn(batch):
     attrs = attrs[selected]
     indices_batch = indices_batch[selected].unsqueeze(-1)
 
-    return images, rois, classes, offsets, attrs, indices_batch
+    return batch_images, rois, classes, offsets, attrs, indices_batch
+
 
 def get_indices_batch(n_images, n_roi_per_image):
     batches = []

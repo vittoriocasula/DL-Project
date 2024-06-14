@@ -102,7 +102,7 @@ def regr_to_bbox(proposals, regr, image_size):
     pred_bbox = torchvision.ops.clip_boxes_to_image(pred_bbox, image_size)
     return pred_bbox
 
-
+"""
 def apply_nms(cls_max_score, max_score, bboxs):
 
     res_bbox_list = []
@@ -110,13 +110,52 @@ def apply_nms(cls_max_score, max_score, bboxs):
     res_scores_list = []
 
     num_classes = config["global"]["num_classes"]
-    iou_threshold = config["postprocessing"]["iou_threshold"]
+    iou_threshold = config["postprocessing"]["nms_iou_threshold"]
     max_roi_per_image = config["postprocessing"]["max_roi_per_image"]
 
     for c in range(1, num_classes + 1):  # nms per classe indipendente
         c_mask = cls_max_score == c
         c_bboxs = bboxs[c_mask]
         c_score = max_score[c_mask]
+
+        if len(c_bboxs) > 0:
+            nms_idxs = torchvision.ops.nms(c_bboxs, c_score, iou_threshold)
+            nms_idxs = nms_idxs[:max_roi_per_image]
+
+            res_bbox_list.append(c_bboxs[nms_idxs])
+            res_cls_list.append(torch.full((len(nms_idxs),), c, dtype=torch.int64))
+            res_scores_list.append(c_score[nms_idxs])
+
+    if res_bbox_list:
+        res_bbox = torch.cat(res_bbox_list, dim=0)
+        res_cls = torch.cat(res_cls_list, dim=0)
+        res_scores = torch.cat(res_scores_list, dim=0)
+    else:
+        res_bbox = torch.empty((0, 4), dtype=bboxs.dtype, device=bboxs.device)
+        res_cls = torch.empty((0,), dtype=torch.int64, device=bboxs.device)
+        res_scores = torch.empty((0,), dtype=max_score.dtype, device=max_score.device)
+
+    return res_bbox, res_cls, res_scores
+"""
+
+def apply_nms(cls_max_score, max_score, bboxs, score_threshold=config["postprocessing"]["score_threshold"]):
+    res_bbox_list = []
+    res_cls_list = []
+    res_scores_list = []
+
+    num_classes = config["global"]["num_classes"]
+    iou_threshold = config["postprocessing"]["nms_iou_threshold"]
+    max_roi_per_image = config["postprocessing"]["max_roi_per_image"]
+
+    for c in range(1, num_classes + 1):  # NMS per class independently
+        c_mask = cls_max_score == c
+        c_bboxs = bboxs[c_mask]
+        c_score = max_score[c_mask]
+
+        # Apply score threshold filtering
+        score_mask = c_score > score_threshold
+        c_bboxs = c_bboxs[score_mask]
+        c_score = c_score[score_mask]
 
         if len(c_bboxs) > 0:
             nms_idxs = torchvision.ops.nms(c_bboxs, c_score, iou_threshold)

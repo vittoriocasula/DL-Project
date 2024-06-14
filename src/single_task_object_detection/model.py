@@ -21,16 +21,14 @@ class ROI_Module(nn.Module):
         super(ROI_Module, self).__init__()
 
         self.roipool = torchvision.ops.RoIPool(
-            output_size=config["model"]["out_size_roi_pool"],
+            output_size=(6, 6),
             spatial_scale=config["model"]["spatial_scale"],
         )
 
-        self.feature = nn.Sequential(
+        self.classifier = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                256
-                * config["model"]["out_size_roi_pool"][0]
-                * config["model"]["out_size_roi_pool"][1],
+                256 * 6 * 6,
                 4096,
             ),
             nn.ReLU(inplace=True),
@@ -45,7 +43,7 @@ class ROI_Module(nn.Module):
         )  # create matrix with (batch_idx, rois(xyxy))
         res = self.roipool(features, idx_rois)
         res = res.view(res.size(0), -1)
-        feat = self.feature(res)
+        feat = self.classifier(res)
         return feat
 
 
@@ -86,12 +84,13 @@ class ObjectDetectionModel(nn.Module):
         return cls_score, bbox
 
     def prediction_img(self, img, rois, ridx):
-        self.eval()
+        # self.eval()
         score, tbbox = self(img, rois, ridx)
+        _, _, heigth, width = img.shape
         score = nn.functional.softmax(score, dim=-1)
         max_score, cls_max_score = torch.max(score, dim=-1)
         bboxs = regr_to_bbox(
-            rois, tbbox, config["transform"]["resize_values"]
+            proposals=rois, regr=tbbox, image_size=(heigth, width)
         )  # bbox relative
         classes = cls_max_score.view(-1, 1, 1).expand(cls_max_score.size(0), 1, 4)
         bboxs = bboxs.gather(1, classes).squeeze(1)
@@ -104,6 +103,7 @@ class ObjectDetectionModel(nn.Module):
         labels,
         gt_bbox,
     ):
+        # self.train()
         cel = nn.CrossEntropyLoss()
         sl1 = nn.SmoothL1Loss()
         loss_sc = cel(probs, labels)

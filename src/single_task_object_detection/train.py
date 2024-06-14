@@ -1,6 +1,6 @@
 import torch
 from config_experiments import config
-from utils import set_seed, set_device
+from utils import set_seed, set_device, log_dict
 from dataloader import VOC08Attr, collate_fn
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
@@ -31,9 +31,10 @@ def train(data_loader, model, optimizer, device):
         train_cls = train_cls.to(device)
         train_offset = train_offset.to(device)
         indices_batch = indices_batch.to(device)
+        _, _, height, width = image.shape
 
         train_roi = relative_to_absolute_bbox(
-            train_roi, config["transform"]["resize_values"]
+            boxes=train_roi, image_size=(width, height)
         )
         cls_score, bbox_offset = model(image, train_roi, indices_batch)
         total_loss, loss_cls, loss_loc = model.calc_loss(
@@ -75,68 +76,66 @@ def eval(data_loader, model, device):
     losses_total = []
     losses_cls = []
     losses_loc = []
-    with torch.no_grad():
-        data_loader = tqdm(data_loader, desc="Evaluation")
-        for i, (
-            image,
-            train_roi,
-            train_cls,
-            train_offset,
-            _,
-            indices_batch,
-        ) in enumerate(data_loader):
-            image = image.to(device)
-            train_roi = train_roi.to(device)
-            train_cls = train_cls.to(device)
-            train_offset = train_offset.to(device)
-            train_roi = relative_to_absolute_bbox(
-                train_roi, config["transform"]["resize_values"]
-            )
-            indices_batch = indices_batch.to(device)
-            cls_score, bbox_offset = model(image, train_roi, indices_batch)
-            total_loss, loss_cls, loss_loc = model.calc_loss(
-                cls_score, bbox_offset, train_cls, train_offset
-            )
+    data_loader = tqdm(data_loader, desc="Evaluation", leave=False)
 
-            losses_total.append(total_loss)
-            losses_cls.append(loss_cls)
-            losses_loc.append(loss_loc)
+    for i, (image, train_roi, train_cls, train_offset, _, indices_batch) in enumerate(
+        data_loader
+    ):
 
-            wandb.log(
-                {
-                    "loss": total_loss.item(),
-                    "loss_cls": loss_cls.item(),
-                    "loss_loc": loss_loc.item(),
-                }
-            )
-            # Updating tqdm description with loss values
-            data_loader.set_postfix(
-                {
-                    "Total Loss": total_loss.item(),
-                    "Cls Loss": loss_cls.item(),
-                    "Loc Loss": loss_loc.item(),
-                }
-            )
+        image = image.to(device)
+        train_roi = train_roi.to(device)
+        train_cls = train_cls.to(device)
+        train_offset = train_offset.to(device)
+        indices_batch = indices_batch.to(device)
+        _, _, height, width = image.shape
+
+        train_roi = relative_to_absolute_bbox(
+            boxes=train_roi, image_size=(width, height)
+        )
+        cls_score, bbox_offset = model(image, train_roi, indices_batch)
+        total_loss, loss_cls, loss_loc = model.calc_loss(
+            cls_score, bbox_offset, train_cls, train_offset
+        )
+
+        losses_total.append(total_loss)
+        losses_cls.append(loss_cls)
+        losses_loc.append(loss_loc)
+
+        wandb.log(
+            {
+                "loss": total_loss.item(),
+                "loss_cls": loss_cls.item(),
+                "loss_loc": loss_loc.item(),
+            }
+        )
+        # Updating tqdm description with loss values
+        data_loader.set_postfix(
+            {
+                "Total Loss": total_loss.item(),
+                "Cls Loss": loss_cls.item(),
+                "Loc Loss": loss_loc.item(),
+            }
+        )
     return (
         torch.mean(torch.tensor(losses_total)).item(),
         torch.mean(torch.tensor(losses_cls)).item(),
         torch.mean(torch.tensor(losses_loc)).item(),
     )
 
-if __name__ == "__main__": 
 
-    set_seed(config["reproducibility"]["seed"])
-    device = set_device(config["device"]["gpu_id"])
-
+if __name__ == "__main__":
     current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
-    model_name = f"model_{current_time}"
-
-
     logging.basicConfig(
         filename=f"./outputs/{current_time}.log",
         level=logging.INFO,
         format="%(asctime)s:%(levelname)s:%(message)s ",
     )
+    log_dict(config)
+
+    set_seed(config["reproducibility"]["seed"])
+    device = set_device(config["device"]["gpu_id"])
+
+    model_name = f"model_{current_time}"
 
     wandb.init(
         group="object_detection",
@@ -148,7 +147,10 @@ if __name__ == "__main__":
 
     transform_train = transforms.Compose(
         [
-            transforms.Resize(size=config["transform"]["resize_values"]),
+            transforms.Resize(
+                size=config["transform"]["resize_values"],
+                max_size=config["transform"]["max_size"],
+            ),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=config["transform"]["mean"], std=config["transform"]["std"]
@@ -158,7 +160,10 @@ if __name__ == "__main__":
 
     transform_val = transforms.Compose(
         [
-            transforms.Resize(size=config["transform"]["resize_values"]),
+            transforms.Resize(
+                size=config["transform"]["resize_values"],
+                max_size=config["transform"]["max_size"],
+            ),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=config["transform"]["mean"], std=config["transform"]["std"]
@@ -170,9 +175,10 @@ if __name__ == "__main__":
     train_data = VOC08Attr(train=True, transform=transform_train)
     val_data = VOC08Attr(train=False, transform=transform_val)
 
-
     train_dataloader = DataLoader(
-        train_data, batch_size=config["preprocessing"]["n_images"], collate_fn=collate_fn
+        train_data,
+        batch_size=config["preprocessing"]["n_images"],
+        collate_fn=collate_fn,
     )
     val_dataloader = DataLoader(
         val_data, batch_size=config["preprocessing"]["n_images"], collate_fn=collate_fn
@@ -222,7 +228,9 @@ if __name__ == "__main__":
             train_dataloader, model, optimizer, device
         )
         mAP_train_dict = compute_mAP(train_data, model, device)  # mAP on train
-        val_loss_total, val_loss_class, val_loss_loc = eval(val_dataloader, model, device)
+        val_loss_total, val_loss_class, val_loss_loc = eval(
+            val_dataloader, model, device
+        )
         mAP_val_dict = compute_mAP(val_data, model, device)  # mAP on val
 
         mAP_train = mAP_train_dict["map_50"].item()

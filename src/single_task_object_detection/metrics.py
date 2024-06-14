@@ -15,7 +15,7 @@ def compute_mAP(data_set, model, device):  # train/val
         iou_type="bbox",
         class_metrics=True,
         iou_thresholds=[0.5],
-        max_detection_thresholds=[10, 100, 500]
+        max_detection_thresholds=[10, 100, 500],
     ).to(device)
     metric.warn_on_many_detections = False
     model.eval()
@@ -36,8 +36,10 @@ def compute_mAP(data_set, model, device):  # train/val
             gt_bbox = gt_bbox.to(device)
             ss_rois = ss_rois.to(device)
             gt_bbox = relative_to_absolute_bbox(gt_bbox, image_size)
+
+            _, _, heigth, width = image.shape
             ss_rois = relative_to_absolute_bbox(
-                ss_rois, config["transform"]["resize_values"]
+                boxes=ss_rois, image_size=(heigth, width)
             )
 
             indices_batch = get_indices_batch(
@@ -51,7 +53,7 @@ def compute_mAP(data_set, model, device):  # train/val
             )
 
             bboxs = absolute_to_relative_bbox(
-                bboxs, config["transform"]["resize_values"]
+                bboxs, (heigth, width)
             )
             bboxs = relative_to_absolute_bbox(bboxs, image_size)
 
