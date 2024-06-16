@@ -31,11 +31,7 @@ def train(data_loader, model, optimizer, device):
         train_cls = train_cls.to(device)
         train_offset = train_offset.to(device)
         indices_batch = indices_batch.to(device)
-        _, _, height, width = image.shape
-
-        train_roi = relative_to_absolute_bbox(
-            boxes=train_roi, image_size=(width, height)
-        )
+  
         cls_score, bbox_offset = model(image, train_roi, indices_batch)
         total_loss, loss_cls, loss_loc = model.calc_loss(
             cls_score, bbox_offset, train_cls, train_offset
@@ -87,11 +83,7 @@ def eval(data_loader, model, device):
         train_cls = train_cls.to(device)
         train_offset = train_offset.to(device)
         indices_batch = indices_batch.to(device)
-        _, _, height, width = image.shape
-
-        train_roi = relative_to_absolute_bbox(
-            boxes=train_roi, image_size=(width, height)
-        )
+ 
         cls_score, bbox_offset = model(image, train_roi, indices_batch)
         total_loss, loss_cls, loss_loc = model.calc_loss(
             cls_score, bbox_offset, train_cls, train_offset
@@ -183,9 +175,14 @@ if __name__ == "__main__":
     val_dataloader = DataLoader(
         val_data, batch_size=config["preprocessing"]["n_images"], collate_fn=collate_fn
     )
-
     # model
-    model = ObjectDetectionModel().to(device)
+    model = ObjectDetectionModel().to(device)    
+    if config["global"].get("load_pretrained_model"):
+        logging.info('load %s\n' % config["global"]["load_pretrained_model"])
+        model.load_state_dict(torch.load(config["global"]["load_pretrained_model"]))
+    else:
+        logging.info('Pretrained models not provided. Use --load_pretrained_model or the model will be randomly initialized.')
+    
     # optimizer
     params = []
     for name, param in model.named_parameters():
@@ -228,26 +225,32 @@ if __name__ == "__main__":
             train_dataloader, model, optimizer, device
         )
         mAP_train_dict = compute_mAP(train_data, model, device)  # mAP on train
+        """
         val_loss_total, val_loss_class, val_loss_loc = eval(
             val_dataloader, model, device
-        )
+        )"""
         mAP_val_dict = compute_mAP(val_data, model, device)  # mAP on val
 
         mAP_train = mAP_train_dict["map_50"].item()
         mAP_val = mAP_val_dict["map_50"].item()
 
-        logging.info(
+        """l
+        ogging.info(
             f"[Epoch {epoch+1}]\tTRAIN: total_loss = {train_loss_total:.4f} loss_cls = {train_loss_class:.4f} loss_loc = {train_loss_loc:.4f} \tVAL: total_loss val= {val_loss_total:.4f} loss_cls = {val_loss_class:.4f} loss_loc = {val_loss_loc:.4f} \t mAP_train: {mAP_train*100:.2f} mAP_val: {mAP_val*100:.2f}"
+        )"""
+
+        logging.info(
+            f"[Epoch {epoch+1}]\tTRAIN: total_loss = {train_loss_total:.4f} loss_cls = {train_loss_class:.4f} loss_loc = {train_loss_loc:.4f} \t\t mAP_train: {mAP_train*100:.2f} mAP_val: {mAP_val*100:.2f}"
         )
         wandb.log(
             {
                 "epoch": epoch + 1,
                 "loss training": train_loss_total,
-                "loss validation": val_loss_total,
+                #"loss validation": val_loss_total,
                 "loss classification training": train_loss_class,
-                "loss classification validation": val_loss_class,
+                #"loss classification validation": val_loss_class,
                 "loss location training": train_loss_loc,
-                "loss location validation": val_loss_loc,
+                #"loss location validation": val_loss_loc,
                 "mAP_train": mAP_train,
                 "mAP_val": mAP_val,
             }

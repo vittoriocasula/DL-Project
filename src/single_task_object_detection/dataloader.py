@@ -3,7 +3,7 @@ import pandas as pd
 from PIL import Image
 import torch
 import torchvision
-from bbox_transform import bbox_offset, absolute_to_relative_bbox
+from bbox_transform import bbox_offset, absolute_to_relative_bbox, relative_to_absolute_bbox
 from config_experiments import config
 import torchvision
 
@@ -174,9 +174,17 @@ def collate_fn(batch):
     attrs = []
     indices_batch = []
     for i in range(len(batch)):
+        # converti gt_bbox nella coordinate dell'immagine resized
+        # converti ss_rois nella coordinate dell'immagine resized
+        _, height, width = image_shapes[i]
+        gt_bbox_resized = relative_to_absolute_bbox(boxes=gt_bbox[i], image_size=(width, height))
+        ss_rois_resized = relative_to_absolute_bbox(boxes=ss_rois[i], image_size=(width, height))
+
+
         train_roi, train_cls, train_offset, train_attr = extract_positive_and_negative(
-            gt_class[i], gt_bbox[i], gt_attributes[i], ss_rois[i]
+            gt_class[i], gt_bbox_resized, gt_attributes[i], ss_rois_resized
         )
+        
         idx_batch = torch.full(size=(train_cls.shape[0],), fill_value=i)
         # ottieni tutti i positivi e i negativi
 

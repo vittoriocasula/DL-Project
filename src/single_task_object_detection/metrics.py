@@ -39,7 +39,7 @@ def compute_mAP(data_set, model, device):  # train/val
 
             _, _, heigth, width = image.shape
             ss_rois = relative_to_absolute_bbox(
-                boxes=ss_rois, image_size=(heigth, width)
+                boxes=ss_rois, image_size=(width, heigth)
             )
 
             indices_batch = get_indices_batch(
@@ -48,17 +48,17 @@ def compute_mAP(data_set, model, device):  # train/val
 
             indices_batch = indices_batch.to(device)
 
-            cls_max_score, max_score, bboxs = model.prediction_img(
+            cls_max_score_net, max_score_net, bboxs_net = model.prediction_img(
                 image, ss_rois, indices_batch
             )
 
-            bboxs = absolute_to_relative_bbox(
-                bboxs, (heigth, width)
+            bboxs_net = absolute_to_relative_bbox(
+                bboxs_net, (width, heigth )
             )
-            bboxs = relative_to_absolute_bbox(bboxs, image_size)
+            bboxs_net = relative_to_absolute_bbox(bboxs_net, image_size)
 
             pred_bbox, pred_class, pred_score = apply_nms(
-                cls_max_score, max_score, bboxs
+                cls_max_score_net, max_score_net, bboxs_net
             )
 
             preds = [
