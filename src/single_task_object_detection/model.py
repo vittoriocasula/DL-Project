@@ -21,14 +21,19 @@ class ROI_Module(nn.Module):
         super(ROI_Module, self).__init__()
 
         self.roipool = torchvision.ops.RoIPool(
-            output_size=(6, 6),
+            output_size=(
+                config["model"]["output_size_roipool"][0],
+                config["model"]["output_size_roipool"][1],
+            ),
             spatial_scale=config["model"]["spatial_scale"],
         )
 
         self.classifier = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                256 * 6 * 6,
+                256
+                * config["model"]["output_size_roipool"][0]
+                * config["model"]["output_size_roipool"][1],
                 4096,
             ),
             nn.ReLU(inplace=True),
@@ -83,15 +88,30 @@ class ObjectDetectionModel(nn.Module):
         cls_score, bbox = self.obj_detect_head(out)
         return cls_score, bbox
 
-    def prediction_img(self, img, rois, ridx):
+    def prediction_img(self, img, rois, ridx, mean_std_by_class):
         # self.eval()
         score, tbbox = self(img, rois, ridx)
         _, _, heigth, width = img.shape
         score = nn.functional.softmax(score, dim=-1)
         max_score, cls_max_score = torch.max(score, dim=-1)
+
+        denormalized_regr = torch.empty_like(tbbox)
+        for class_ind in range(tbbox.shape[1]):
+            if class_ind != 0:
+                mean = torch.tensor(
+                    mean_std_by_class[str(class_ind)]["mean"], device=tbbox.device
+                )
+                std = torch.tensor(
+                    mean_std_by_class[str(class_ind)]["std"], device=tbbox.device
+                )
+                denormalized_regr[:, class_ind, :] = tbbox[:, class_ind, :] * std + mean
+            else:
+                denormalized_regr[:, class_ind, :] = tbbox[:, class_ind, :]
+
         bboxs = regr_to_bbox(
-            proposals=rois, regr=tbbox, image_size=(heigth, width)
-        )  # bbox relative
+            proposals=rois, regr=denormalized_regr, image_size=(heigth, width)
+        )
+
         classes = cls_max_score.view(-1, 1, 1).expand(cls_max_score.size(0), 1, 4)
         bboxs = bboxs.gather(1, classes).squeeze(1)
         return cls_max_score, max_score, bboxs

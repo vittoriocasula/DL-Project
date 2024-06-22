@@ -3,44 +3,36 @@ import torchvision
 from config_experiments import config
 
 
-def absolute_to_relative_bbox(boxes, image_size):
-    """
-    Convert bounding boxes from absolute coordinates to relative coordinates.
+def resize_bounding_boxes(bboxes, orig_size, new_size):
+    orig_w, orig_h = orig_size
+    new_w, new_h = new_size
 
-    Args:
-        boxes (Tensor): Tensor of shape (N, 4) containing bounding boxes in format (x1, y1, x2, y2).
-        image_size (tuple): Tuple containing (width, height) of the image.
+    scale_width = new_w / orig_w
+    scale_height = new_h / orig_h
+    scale = min(scale_width, scale_height)
 
-    Returns:
-        Tensor: Tensor of shape (N, 4) containing bounding boxes in relative coordinates.
-    """
-    width, height = image_size
-    boxes = boxes.clone()
-    boxes[:, 0] /= width
-    boxes[:, 1] /= height
-    boxes[:, 2] /= width
-    boxes[:, 3] /= height
-    return boxes
+    if scale == scale_width:
+        effective_w = new_w
+        effective_h = orig_h * scale
+    else:
+        effective_h = new_h
+        effective_w = orig_w * scale
 
+    offset_x = (new_w - effective_w) / 2
+    offset_y = (new_h - effective_h) / 2
 
-def relative_to_absolute_bbox(boxes, image_size):
-    """
-    Convert bounding boxes from relative coordinates to absolute coordinates.
+    bboxes = bboxes.to(torch.float32)
+    scaled_bboxes = bboxes * scale
 
-    Args:
-        boxes (Tensor): Tensor of shape (N, 4) containing bounding boxes in format (x1, y1, x2, y2).
-        image_size (tuple): Tuple containing (width, height) of the image.
+    offset = torch.tensor(
+        [offset_x, offset_y, offset_x, offset_y],
+        dtype=torch.float32,
+        device=bboxes.device,
+    )
+    resized_bboxes = scaled_bboxes + offset
+    resized_bboxes = torch.round(resized_bboxes)
 
-    Returns:
-        Tensor: Tensor of shape (N, 4) containing bounding boxes in absolute coordinates.
-    """
-    width, height = image_size
-    boxes = boxes.clone()
-    boxes[:, 0] *= width
-    boxes[:, 1] *= height
-    boxes[:, 2] *= width
-    boxes[:, 3] *= height
-    return boxes
+    return resized_bboxes
 
 
 def bbox_offset(proposals, assigned_bb, eps=1e-6):
@@ -48,6 +40,7 @@ def bbox_offset(proposals, assigned_bb, eps=1e-6):
     proposals: (N, 4) --> (Px, Py, Pw, Ph)
     assigned_bb: (N,4) --> (Gx, Gy, Gw, Gh)
     """
+
     proposals = torchvision.ops.box_convert(proposals, in_fmt="xyxy", out_fmt="cxcywh")
     assigned_bb = torchvision.ops.box_convert(
         assigned_bb, in_fmt="xyxy", out_fmt="cxcywh"
@@ -59,42 +52,23 @@ def bbox_offset(proposals, assigned_bb, eps=1e-6):
     offset_h = torch.log((assigned_bb[:, 3] + eps) / (proposals[:, 3] + eps))
 
     offset = torch.stack([offset_x, offset_y, offset_w, offset_h], dim=1)
-    offset_normalized = (
-        offset - torch.tensor(config["preprocessing"]["bbox_normalize_means"])
-    ) / torch.tensor(config["preprocessing"]["bbox_normalize_stds"])
 
-    return offset_normalized
+    return offset
 
 
 def regr_to_bbox(proposals, regr, image_size):
     """
     proposals: (N, 4) --> (Px, Py, Pw, Ph)
-    offset_preds (N, K, 4) --> (dx, dy, dw, dh) for each class K
+    regr (N, K, 4) --> (dx, dy, dw, dh) for each class K
     """
-
     proposals = torchvision.ops.box_convert(proposals, in_fmt="xyxy", out_fmt="cxcywh")
+    
     proposals = proposals.unsqueeze(-1)
 
-    un_normalized_regr_x = (
-        (regr[:, :, 0]) * config["preprocessing"]["bbox_normalize_stds"][0]
-    ) + config["preprocessing"]["bbox_normalize_means"][0]
-
-    un_normalized_regr_y = (
-        (regr[:, :, 1]) * config["preprocessing"]["bbox_normalize_stds"][1]
-    ) + config["preprocessing"]["bbox_normalize_means"][1]
-
-    un_normalized_regr_w = (
-        (regr[:, :, 2]) * config["preprocessing"]["bbox_normalize_stds"][2]
-    ) + config["preprocessing"]["bbox_normalize_means"][2]
-
-    un_normalized_regr_h = (
-        (regr[:, :, 3]) * config["preprocessing"]["bbox_normalize_stds"][3]
-    ) + config["preprocessing"]["bbox_normalize_means"][3]
-
-    pred_bbox_x = (un_normalized_regr_x * proposals[:, 2, :]) + proposals[:, 0, :]
-    pred_bbox_y = (un_normalized_regr_y * proposals[:, 3, :]) + proposals[:, 1, :]
-    pred_bbox_w = torch.exp(un_normalized_regr_w) * proposals[:, 2, :]
-    pred_bbox_h = torch.exp(un_normalized_regr_h) * proposals[:, 3, :]
+    pred_bbox_x = (regr[:, :, 0] * proposals[:, 2, :]) + proposals[:, 0, :]
+    pred_bbox_y = (regr[:, :, 1] * proposals[:, 3, :]) + proposals[:, 1, :]
+    pred_bbox_w = torch.exp(regr[:, :, 2]) * proposals[:, 2, :]
+    pred_bbox_h = torch.exp(regr[:, :, 3]) * proposals[:, 3, :]
 
     pred_bbox = torch.stack((pred_bbox_x, pred_bbox_y, pred_bbox_w, pred_bbox_h), dim=2)
 
@@ -102,43 +76,13 @@ def regr_to_bbox(proposals, regr, image_size):
     pred_bbox = torchvision.ops.clip_boxes_to_image(pred_bbox, image_size)
     return pred_bbox
 
-"""
-def apply_nms(cls_max_score, max_score, bboxs):
 
-    res_bbox_list = []
-    res_cls_list = []
-    res_scores_list = []
-
-    num_classes = config["global"]["num_classes"]
-    iou_threshold = config["postprocessing"]["nms_iou_threshold"]
-    max_roi_per_image = config["postprocessing"]["max_roi_per_image"]
-
-    for c in range(1, num_classes + 1):  # nms per classe indipendente
-        c_mask = cls_max_score == c
-        c_bboxs = bboxs[c_mask]
-        c_score = max_score[c_mask]
-
-        if len(c_bboxs) > 0:
-            nms_idxs = torchvision.ops.nms(c_bboxs, c_score, iou_threshold)
-            nms_idxs = nms_idxs[:max_roi_per_image]
-
-            res_bbox_list.append(c_bboxs[nms_idxs])
-            res_cls_list.append(torch.full((len(nms_idxs),), c, dtype=torch.int64))
-            res_scores_list.append(c_score[nms_idxs])
-
-    if res_bbox_list:
-        res_bbox = torch.cat(res_bbox_list, dim=0)
-        res_cls = torch.cat(res_cls_list, dim=0)
-        res_scores = torch.cat(res_scores_list, dim=0)
-    else:
-        res_bbox = torch.empty((0, 4), dtype=bboxs.dtype, device=bboxs.device)
-        res_cls = torch.empty((0,), dtype=torch.int64, device=bboxs.device)
-        res_scores = torch.empty((0,), dtype=max_score.dtype, device=max_score.device)
-
-    return res_bbox, res_cls, res_scores
-"""
-
-def apply_nms(cls_max_score, max_score, bboxs, score_threshold=config["postprocessing"]["score_threshold"]):
+def apply_nms(
+    cls_max_score,
+    max_score,
+    bboxs,
+    score_threshold=config["postprocessing"]["score_threshold"],
+):
     res_bbox_list = []
     res_cls_list = []
     res_scores_list = []

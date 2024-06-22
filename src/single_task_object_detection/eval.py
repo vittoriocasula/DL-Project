@@ -27,8 +27,8 @@ if __name__ == "__main__":
             ),
         ]
     )
-    set_seed(config["reproducibility"]["seed"])
-    device = set_device(config["device"]["gpu_id"])
+    set_seed(config["global"]["seed"])
+    device = set_device(config["global"]["gpu_id"])
     data_test = VOC08Attr(train=False, transform=transform_test)
     model = ObjectDetectionModel().to(device)
 

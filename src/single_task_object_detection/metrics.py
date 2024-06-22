@@ -1,12 +1,13 @@
 import torch
 from config_experiments import config
-from dataloader import get_indices_batch
-from bbox_transform import relative_to_absolute_bbox, absolute_to_relative_bbox
+from bbox_transform import resize_bounding_boxes
 import torchmetrics
 from bbox_transform import apply_nms
 from tqdm import tqdm
 import wandb
 import logging
+import yaml
+import os
 
 
 def compute_mAP(data_set, model, device):  # train/val
@@ -20,7 +21,15 @@ def compute_mAP(data_set, model, device):  # train/val
     metric.warn_on_many_detections = False
     model.eval()
 
-    data_set = tqdm(data_set, desc="Compute mAP")
+    with open(
+            os.getcwd()
+            + "/src/single_task_object_detection/"
+            + "target_mean_std_by_class.yaml",
+            "r",
+        ) as f:
+            mean_std_by_class = yaml.safe_load(f)
+
+
     with torch.no_grad():
 
         for i, (
@@ -30,32 +39,27 @@ def compute_mAP(data_set, model, device):  # train/val
             gt_bbox,
             gt_attributes,
             ss_rois,
-        ) in enumerate(data_set):
+        ) in enumerate(tqdm(data_set, desc="Compute mAP")):
             image = image.unsqueeze(0).to(device)
             gt_class = gt_class.to(device)
             gt_bbox = gt_bbox.to(device)
             ss_rois = ss_rois.to(device)
-            gt_bbox = relative_to_absolute_bbox(gt_bbox, image_size)
 
-            _, _, heigth, width = image.shape
-            ss_rois = relative_to_absolute_bbox(
-                boxes=ss_rois, image_size=(width, heigth)
-            )
-
-            indices_batch = get_indices_batch(
+            orig_w, orig_h = image_size
+            new_w, new_h = (image.shape[3], image.shape[2])
+            gt_bbox = resize_bounding_boxes(gt_bbox, orig_size=(new_w, new_h), new_size=(orig_w, orig_h))
+    
+            indices_batch = data_set.get_indices_batch(
                 image.shape[0], ss_rois.shape[0]
             ).unsqueeze(-1)
 
             indices_batch = indices_batch.to(device)
 
             cls_max_score_net, max_score_net, bboxs_net = model.prediction_img(
-                image, ss_rois, indices_batch
+                image, ss_rois, indices_batch, mean_std_by_class
             )
 
-            bboxs_net = absolute_to_relative_bbox(
-                bboxs_net, (width, heigth )
-            )
-            bboxs_net = relative_to_absolute_bbox(bboxs_net, image_size)
+            bboxs_net = resize_bounding_boxes(bboxs_net, orig_size=(new_w, new_h), new_size=(orig_w, orig_h))
 
             pred_bbox, pred_class, pred_score = apply_nms(
                 cls_max_score_net, max_score_net, bboxs_net
@@ -81,6 +85,7 @@ def compute_mAP(data_set, model, device):  # train/val
 
 
 def view_mAP_for_class(mAP, data_test):
+    logging.info(mAP)
     logging.info(f"\nmAP@0.50 (per class):")
     index = torch.arange(1, config["global"]["num_classes"] + 1)
 

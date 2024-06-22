@@ -13,14 +13,21 @@
       "args": ["--config", "config/single_task_object_detection.yaml"]
     },
     {
+      "name": "Debugger single_task_attribute_prediction/train.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/single_task_attribute_prediction/train.py",
+      "console": "integratedTerminal",
+      "args": ["--config", "config/single_task_attribute_prediction.yaml"]
+    },
+    {
       "name": "Debugger single_task_object_detection/train_official.py",
       "type": "debugpy",
       "request": "launch",
       "program": "src/single_task_object_detection/train_official.py",
       "console": "integratedTerminal",
       "args": ["--config", "config/single_task_object_detection.yaml"]
-    }
-    ,
+    },
     {
       "name": "Debugger official_dataset.py",
       "type": "debugpy",
@@ -28,8 +35,7 @@
       "program": "src/single_task_object_detection/official_dataset.py",
       "console": "integratedTerminal",
       "args": ["--config", "config/single_task_object_detection.yaml"]
-    }
-    ,
+    },
     {
       "name": "Debugger single_task_object_detection/eval.py",
       "type": "debugpy",

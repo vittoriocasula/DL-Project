@@ -3,9 +3,15 @@ import pandas as pd
 from PIL import Image
 import torch
 import torchvision
-from bbox_transform import bbox_offset, absolute_to_relative_bbox, relative_to_absolute_bbox
+from bbox_transform import (
+    bbox_offset,
+    resize_bounding_boxes,
+)
 from config_experiments import config
 import torchvision
+import yaml
+import os
+
 
 
 class VOC08Attr(Dataset):
@@ -37,6 +43,15 @@ class VOC08Attr(Dataset):
         self.category2id = {v: k for k, v in self.id2category.items()}
         self.id2attribute = dict((i + 1, j[0]) for i, j in enumerate(self.attr_name))
         self.attribute2id = {v: k for k, v in self.id2attribute.items()}
+
+
+        with open(
+            os.getcwd()
+            + "/src/single_task_object_detection/"
+            + "target_mean_std_by_class.yaml",
+            "r",
+        ) as f:
+            self.mean_std_by_class = yaml.safe_load(f)
 
     def __len__(self):
         return len(self.images_names)
@@ -81,8 +96,9 @@ class VOC08Attr(Dataset):
     def random_horizontal_flip_with_boxes(self, image, gt_bbox, ss_rois, p=0.5):
         if torch.rand(1) < p:
             image = torchvision.transforms.functional.hflip(image)
-            gt_bbox = self.flip_boxes(gt_bbox, 1)
-            ss_rois = self.flip_boxes(ss_rois, 1)
+            image_width = image.shape[2]
+            gt_bbox = self.flip_boxes(gt_bbox, image_width)
+            ss_rois = self.flip_boxes(ss_rois, image_width)
 
         return image, gt_bbox, ss_rois
 
@@ -98,143 +114,156 @@ class VOC08Attr(Dataset):
             image = Image.open(self.root + "data/VOC2008_attribute/train/" + img_path)
         else:
             image = Image.open(self.root + "data/VOC2008_attribute/val/" + img_path)
-        img_size = image.size  # W, H (original)
+        img_size_orig = image.size  # W, H (original)
         gt_class, gt_bbox, gt_attributes = self.extract_annotations_image(
             self.df, img_path
         )
         ss_rois = self.ss_rois[idx]
         if self.transform:
             image = self.transform(image)
-            # gt_bbox absolute to relative rispetto alla dimensione originale dell'immagine
-            # ss_rois absolute to relative rispetto alla dimensione originale dell'immagine
-            gt_bbox = absolute_to_relative_bbox(gt_bbox, img_size)
-            ss_rois = absolute_to_relative_bbox(ss_rois, img_size)
+
+
+            orig_w, orig_h = img_size_orig
+            new_w, new_h = (image.shape[2], image.shape[1])
+
+            gt_bbox = resize_bounding_boxes(
+                gt_bbox, orig_size=(orig_w, orig_h), new_size=(new_w, new_h)
+            )
+            ss_rois = resize_bounding_boxes(
+                ss_rois, orig_size=(orig_w, orig_h), new_size=(new_w, new_h)
+            )
+
             if self.train:
                 image, gt_bbox, ss_rois = self.random_horizontal_flip_with_boxes(
                     image, gt_bbox, ss_rois
                 )
-        return image, img_size, gt_class, gt_bbox, gt_attributes, ss_rois
+        return image, img_size_orig, gt_class, gt_bbox, gt_attributes, ss_rois
 
+    def extract_positive_and_negative(self, gt_class, gt_bbox, gt_attributes, ss_rois):
+        train_roi = []
+        train_cls = []
+        train_offset = []
+        train_attr = []
 
-def extract_positive_and_negative(gt_class, gt_bbox, gt_attributes, ss_rois):
-    train_roi = []
-    train_cls = []
-    train_offset = []
-    train_attr = []
+        ious = torchvision.ops.box_iou(ss_rois, gt_bbox)
+        max_ious = ious.max(axis=1).values
+        max_idx = ious.argmax(axis=1)
+        offset_bbox = bbox_offset(ss_rois, gt_bbox[max_idx])
 
-    ious = torchvision.ops.box_iou(ss_rois, gt_bbox)
-    max_ious = ious.max(axis=1).values
-    max_idx = ious.argmax(axis=1)
-    offset_bbox = bbox_offset(ss_rois, gt_bbox[max_idx])
+        for j in range(len(ss_rois)):  # j indica la specifica ROI (SS)
+            if max_ious[j] < config["preprocessing"]["iou_thresh_low_neg"]:
+                continue
+            train_roi.append(ss_rois[j])
+            train_offset.append(offset_bbox[j])
 
-    for j in range(len(ss_rois)):  # j indica la specifica ROI (SS)
-        if max_ious[j] < config["preprocessing"]["iou_thresh_low_neg"]:
-            continue
-        train_roi.append(ss_rois[j])
-        train_offset.append(offset_bbox[j])
+            if max_ious[j] >= config["preprocessing"]["iou_thresh_low_pos"]:
+                train_cls.append(
+                    gt_class[max_idx[j].unsqueeze(0)]
+                )  # gt_bbox associata alla roi
+                train_attr.append(gt_attributes[max_idx[j]])
+            else:
+                train_cls.append(torch.tensor([0]))  # background
+                train_attr.append(torch.zeros(config["global"]["num_attributes"]))
 
-        if max_ious[j] >= config["preprocessing"]["iou_thresh_low_pos"]:
-            train_cls.append(
-                gt_class[max_idx[j].unsqueeze(0)]
-            )  # gt_bbox associata alla roi
-            train_attr.append(gt_attributes[max_idx[j]])
-        else:
-            train_cls.append(torch.tensor([0]))  # background
-            train_attr.append(torch.zeros(config["global"]["num_attributes"]))
+        train_roi = torch.stack(train_roi)
+        train_cls = torch.cat(train_cls)
+        train_offset = torch.stack(train_offset)
+        train_attr = torch.stack(train_attr)
 
-    train_roi = torch.stack(train_roi)
-    train_cls = torch.cat(train_cls)
-    train_offset = torch.stack(train_offset)
-    train_attr = torch.stack(train_attr)
+        return train_roi, train_cls, train_offset, train_attr
 
-    return train_roi, train_cls, train_offset, train_attr
+    def collate_fn(self, batch):
+        images, img_size_original, gt_class, gt_bbox, gt_attributes, ss_rois = zip(
+            *batch
+        )  # img_size sono originali= (W,H)
 
+        image_shapes = [
+            img.shape for img in images
+        ]  # considero le dimensioni dopo aver effettuato il resize per mantenere l'aspect ratio
+        max_height = max(shape[1] for shape in image_shapes)  # max heigth
+        max_width = max(shape[2] for shape in image_shapes)  # max width
 
-def collate_fn(batch):
-    images, img_size_original, gt_class, gt_bbox, gt_attributes, ss_rois = zip(
-        *batch
-    )  # img_size sono originali= (W,H)
-
-    image_shapes = [
-        img.shape for img in images
-    ]  # considero le dimensioni dopo aver effettuato il resize per mantenere l'aspect ratio
-    max_height = max(shape[1] for shape in image_shapes)  # max heigth
-    max_width = max(shape[2] for shape in image_shapes)  # max width
-
-    batch_images = torch.zeros(
-        size=(len(images), images[0].shape[0], max_height, max_width)
-    )
-    for i, img in enumerate(images):
-        _, height, width = img.shape
-        batch_images[i, :, :height, :width] = img
-
-    rois = []
-    classes = []
-    offsets = []
-    attrs = []
-    indices_batch = []
-    for i in range(len(batch)):
-        # converti gt_bbox nella coordinate dell'immagine resized
-        # converti ss_rois nella coordinate dell'immagine resized
-        _, height, width = image_shapes[i]
-        gt_bbox_resized = relative_to_absolute_bbox(boxes=gt_bbox[i], image_size=(width, height))
-        ss_rois_resized = relative_to_absolute_bbox(boxes=ss_rois[i], image_size=(width, height))
-
-
-        train_roi, train_cls, train_offset, train_attr = extract_positive_and_negative(
-            gt_class[i], gt_bbox_resized, gt_attributes[i], ss_rois_resized
+        batch_images = torch.zeros(
+            size=(len(images), 3, max_height, max_width)
         )
-        
-        idx_batch = torch.full(size=(train_cls.shape[0],), fill_value=i)
-        # ottieni tutti i positivi e i negativi
+        for i, img in enumerate(images):
+            _, height, width = img.shape
+            batch_images[i, :, :height, :width] = img
 
-        rois.append(train_roi)
-        classes.append(train_cls)
-        offsets.append(train_offset)
-        attrs.append(train_attr)
-        indices_batch.append(idx_batch)
+        rois = []
+        classes = []
+        offsets = []
+        attrs = []
+        indices_batch = []
+        for i in range(len(batch)):
 
-    # prendi i positivi e negativi nella forma 1:3 nel batch
+            train_roi, train_cls, train_offset, train_attr = (
+                self.extract_positive_and_negative(
+                    gt_class[i], gt_bbox[i], gt_attributes[i], ss_rois[i]
+                )
+            )
 
-    rois = torch.cat(rois)
-    classes = torch.cat(classes)
-    offsets = torch.cat(offsets)
-    attrs = torch.cat(attrs)
-    indices_batch = torch.cat(indices_batch)
-
-    pos_indices = classes.nonzero().squeeze(-1)  # tensor of indices
-    neg_indices = (
-        (classes == 0).nonzero(as_tuple=False).squeeze(-1)
-    )  # tensor of indices
-
-    n_pos = int(
-        config["preprocessing"]["n_images"]
-        * config["preprocessing"]["n_roi_per_image"]
-        * config["preprocessing"]["ratio_pos_roi"]
-    )  # positive roi
-    n_neg = (
-        config["preprocessing"]["n_images"] * config["preprocessing"]["n_roi_per_image"]
-        - n_pos
-    )  # negative roi
-
-    pos_selected = pos_indices[torch.randperm(len(pos_indices))[:n_pos]]
-    neg_selected = neg_indices[torch.randperm(len(neg_indices))[:n_neg]]
-
-    selected = torch.cat([pos_selected, neg_selected])
-
-    rois = rois[selected]
-    classes = classes[selected]
-    offsets = offsets[selected]
-    attrs = attrs[selected]
-    indices_batch = indices_batch[selected].unsqueeze(-1)
-
-    return batch_images, rois, classes, offsets, attrs, indices_batch
+            # Normalizzazione del train_offset
+            normalized_train_offset = torch.empty_like(train_offset)
+            for id, cls in enumerate(train_cls):
+                if cls.item() != 0:
+                    mean = torch.tensor(self.mean_std_by_class[str(cls.item())]["mean"])
+                    std = torch.tensor(self.mean_std_by_class[str(cls.item())]["std"])
+                    normalized_train_offset[id] = (train_offset[id] - mean) / std
+                else:
+                    normalized_train_offset[id] = train_offset[id]
 
 
-def get_indices_batch(n_images, n_roi_per_image):
-    batches = []
-    for i in range(n_images):
-        current_batch = torch.full((n_roi_per_image,), fill_value=i)
-        batches.append(current_batch)
-    indices_batch = torch.cat(batches)
-    return indices_batch
+            idx_batch = torch.full(size=(train_cls.shape[0],), fill_value=i)
+            # ottieni tutti i positivi e i negativi
+
+            rois.append(train_roi)
+            classes.append(train_cls)
+            offsets.append(normalized_train_offset) 
+            attrs.append(train_attr)
+            indices_batch.append(idx_batch)
+
+        # prendi i positivi e negativi nella forma 1:3 nel batch
+
+        rois = torch.cat(rois)
+        classes = torch.cat(classes)
+        offsets = torch.cat(offsets)
+        attrs = torch.cat(attrs)
+        indices_batch = torch.cat(indices_batch)
+
+        pos_indices = classes.nonzero().squeeze(-1)  # tensor of indices
+        neg_indices = (
+            (classes == 0).nonzero(as_tuple=False).squeeze(-1)
+        )  # tensor of indices
+
+        n_pos = int(
+            config["preprocessing"]["n_images"]
+            * config["preprocessing"]["n_roi_per_image"]
+            * config["preprocessing"]["ratio_pos_roi"]
+        )  # positive roi
+        n_neg = (
+            config["preprocessing"]["n_images"]
+            * config["preprocessing"]["n_roi_per_image"]
+            - n_pos
+        )  # negative roi
+
+        pos_selected = pos_indices[torch.randperm(len(pos_indices))[:n_pos]]
+        neg_selected = neg_indices[torch.randperm(len(neg_indices))[:n_neg]]
+
+        selected = torch.cat([pos_selected, neg_selected])
+
+        rois = rois[selected]
+        classes = classes[selected]
+        offsets = offsets[selected]
+        attrs = attrs[selected]
+        indices_batch = indices_batch[selected].unsqueeze(-1)
+
+        return batch_images, rois, classes, offsets, attrs, indices_batch
+
+    def get_indices_batch(self, n_images, n_roi_per_image):
+        batches = []
+        for i in range(n_images):
+            current_batch = torch.full((n_roi_per_image,), fill_value=i)
+            batches.append(current_batch)
+        indices_batch = torch.cat(batches)
+        return indices_batch
