@@ -1,0 +1,54 @@
+{
+  // Usare IntelliSense per informazioni sui possibili attributi.
+  // Al passaggio del mouse vengono visualizzate le descrizioni degli attributi esistenti.
+  // Per altre informazioni, visitare: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debugger single_task_object_detection/train.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/single_task_object_detection/train.py",
+      "console": "integratedTerminal",
+      "args": ["--config", "config/single_task_object_detection.yaml"]
+    },
+    {
+      "name": "Debugger single_task_attribute_prediction/train.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/single_task_attribute_prediction/train.py",
+      "console": "integratedTerminal",
+      "args": ["--config", "config/single_task_attribute_prediction.yaml"]
+    },
+    {
+      "name": "Debugger single_task_object_detection/train_official.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/single_task_object_detection/train_official.py",
+      "console": "integratedTerminal",
+      "args": ["--config", "config/single_task_object_detection.yaml"]
+    },
+    {
+      "name": "Debugger official_dataset.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/single_task_object_detection/official_dataset.py",
+      "console": "integratedTerminal",
+      "args": ["--config", "config/single_task_object_detection.yaml"]
+    },
+    {
+      "name": "Debugger single_task_object_detection/eval.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/single_task_object_detection/eval.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": [
+        "--config",
+        "config/single_task_object_detection.yaml",
+        "--model_path",
+        "models/object_detection/model_obj_detect.pth"
+      ]
+    }
+  ]
+}
