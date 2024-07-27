@@ -2,79 +2,31 @@ import torch
 import torchvision
 from config_experiments import config
 
-def absolute_to_relative_bbox(boxes, image_size):
-    """
-    Convert bounding boxes from absolute coordinates to relative coordinates.
-
-    Args:
-        boxes (Tensor): Tensor of shape (N, 4) containing bounding boxes in format (x1, y1, x2, y2).
-        image_size (tuple): Tuple containing (width, height) of the image.
-
-    Returns:
-        Tensor: Tensor of shape (N, 4) containing bounding boxes in relative coordinates.
-    """
-    width, height = image_size
-    boxes = boxes.clone()
-    boxes[:, 0] /= width
-    boxes[:, 1] /= height
-    boxes[:, 2] /= width
-    boxes[:, 3] /= height
-    return boxes
-
-
-def relative_to_absolute_bbox(boxes, image_size):
-    """
-    Convert bounding boxes from relative coordinates to absolute coordinates.
-
-    Args:
-        boxes (Tensor): Tensor of shape (N, 4) containing bounding boxes in format (x1, y1, x2, y2).
-        image_size (tuple): Tuple containing (width, height) of the image.
-
-    Returns:
-        Tensor: Tensor of shape (N, 4) containing bounding boxes in absolute coordinates.
-    """
-    width, height = image_size
-    boxes = boxes.clone()
-    boxes[:, 0] *= width
-    boxes[:, 1] *= height
-    boxes[:, 2] *= width
-    boxes[:, 3] *= height
-    return boxes
-
 
 def resize_bounding_boxes(bboxes, orig_size, new_size):
-    orig_w, orig_h = orig_size
-    new_w, new_h = new_size
+    orig_width, orig_height = orig_size
+    new_width, new_height = new_size
 
-    scale_width = new_w / orig_w
-    scale_height = new_h / orig_h
-    scale = min(scale_width, scale_height)
+    # Calculate scale factors
+    scale_w = new_width / orig_width
+    scale_h = new_height / orig_height
 
-    if scale == scale_width:
-        effective_w = new_w
-        effective_h = orig_h * scale
-    else:
-        effective_h = new_h
-        effective_w = orig_w * scale
+    # Separate the coordinates
+    x_min, y_min, x_max, y_max = bboxes[:, 0], bboxes[:, 1], bboxes[:, 2], bboxes[:, 3]
 
-    offset_x = (new_w - effective_w) / 2
-    offset_y = (new_h - effective_h) / 2
+    # Apply scale factors
+    x_min = x_min * scale_w
+    x_max = x_max * scale_w
+    y_min = y_min * scale_h
+    y_max = y_max * scale_h
 
-    bboxes = bboxes.to(torch.float32)
-    scaled_bboxes = bboxes * scale
-
-    offset = torch.tensor(
-        [offset_x, offset_y, offset_x, offset_y],
-        dtype=torch.float32,
-        device=bboxes.device,
-    )
-    resized_bboxes = scaled_bboxes + offset
-    resized_bboxes = torch.round(resized_bboxes)
+    # Combine the coordinates back into the tensor
+    resized_bboxes = torch.stack([x_min, y_min, x_max, y_max], dim=1)
 
     return resized_bboxes
 
 
-def bbox_offset(proposals, assigned_bb, eps=1e-6):
+def bbox_offset(proposals, assigned_bb):
     """
     proposals: (N, 4) --> (Px, Py, Pw, Ph)
     assigned_bb: (N,4) --> (Gx, Gy, Gw, Gh)
@@ -85,10 +37,17 @@ def bbox_offset(proposals, assigned_bb, eps=1e-6):
         assigned_bb, in_fmt="xyxy", out_fmt="cxcywh"
     )
 
+    offset_x = (assigned_bb[:, 0] - proposals[:, 0]) / (proposals[:, 2])
+    offset_y = (assigned_bb[:, 1] - proposals[:, 1]) / (proposals[:, 3])
+    offset_w = torch.log((assigned_bb[:, 2]) / (proposals[:, 2]))
+    offset_h = torch.log((assigned_bb[:, 3]) / (proposals[:, 3]))
+
+    """
     offset_x = (assigned_bb[:, 0] - proposals[:, 0]) / (proposals[:, 2] + eps)
     offset_y = (assigned_bb[:, 1] - proposals[:, 1]) / (proposals[:, 3] + eps)
     offset_w = torch.log((assigned_bb[:, 2] + eps) / (proposals[:, 2] + eps))
     offset_h = torch.log((assigned_bb[:, 3] + eps) / (proposals[:, 3] + eps))
+    """
 
     offset = torch.stack([offset_x, offset_y, offset_w, offset_h], dim=1)
 
@@ -101,7 +60,7 @@ def regr_to_bbox(proposals, regr, image_size):
     regr (N, K, 4) --> (dx, dy, dw, dh) for each class K
     """
     proposals = torchvision.ops.box_convert(proposals, in_fmt="xyxy", out_fmt="cxcywh")
-    
+
     proposals = proposals.unsqueeze(-1)
 
     pred_bbox_x = (regr[:, :, 0] * proposals[:, 2, :]) + proposals[:, 0, :]
@@ -109,7 +68,9 @@ def regr_to_bbox(proposals, regr, image_size):
     pred_bbox_w = torch.exp(regr[:, :, 2]) * proposals[:, 2, :]
     pred_bbox_h = torch.exp(regr[:, :, 3]) * proposals[:, 3, :]
 
-    pred_bbox = torch.stack((pred_bbox_x, pred_bbox_y, pred_bbox_w, pred_bbox_h), dim=2)
+    pred_bbox = torch.stack(
+        (pred_bbox_x, pred_bbox_y, pred_bbox_w, pred_bbox_h), dim=-1
+    )
 
     pred_bbox = torchvision.ops.box_convert(pred_bbox, in_fmt="cxcywh", out_fmt="xyxy")
     pred_bbox = torchvision.ops.clip_boxes_to_image(pred_bbox, image_size)

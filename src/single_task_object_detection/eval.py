@@ -5,18 +5,9 @@ from dataloader import VOC08Attr
 import torchvision.transforms as transforms
 from model_compressed import ObjectDetectionModel
 from metrics import compute_mAP, view_mAP_for_class
-import wandb
 
 if __name__ == "__main__":
 
-
-    wandb.init(
-        group="object_detection",
-        project="DL",
-        config=config,
-        save_code=True,
-        mode="disabled",
-    )
     model_path = parse_args().model_path
     transform_test = transforms.Compose(
         [
@@ -29,9 +20,9 @@ if __name__ == "__main__":
     )
     set_seed(config["global"]["seed"])
     device = set_device(config["global"]["gpu_id"])
+
     data_test = VOC08Attr(train=False, transform=transform_test)
     model = ObjectDetectionModel().to(device)
-
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     mAP = compute_mAP(data_test, model, device)

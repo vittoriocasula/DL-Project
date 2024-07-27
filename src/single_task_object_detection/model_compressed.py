@@ -5,49 +5,52 @@ from torchvision.models import AlexNet_Weights
 from config_experiments import config
 from bbox_transform import regr_to_bbox
 
+
 def truncated_svd_decomposition(layer, t):
     """
     Applies truncated SVD decomposition on the given linear layer.
-    
+
     Args:
     - layer (nn.Linear): The linear layer to be decomposed.
     - t (int): Number of singular values to keep.
-    
+
     Returns:
     - nn.Sequential: A sequential model with two linear layers representing the truncated SVD.
     """
-    
+
     # Perform SVD on the weight matrix
     W = layer.weight.data
     U, S, V = torch.svd(W)
-    
+
     # Keep only the top t singular values
     U_t = U[:, :t]
     S_t = S[:t]
     V_t = V[:, :t]
-    
+
     # Create the two new linear layers
     first_layer = nn.Linear(V_t.shape[0], t, bias=False)
     second_layer = nn.Linear(t, U_t.shape[0], bias=True)
-    
+
     # Initialize the weights of the new layers
     first_layer.weight.data = (V_t * S_t).t()
     second_layer.weight.data = U_t
-    
+
     # Set the bias of the second layer to be the same as the original layer
     second_layer.bias.data = layer.bias.data.clone()
-    
+
     # Return a sequential model of the two layers
     return nn.Sequential(first_layer, second_layer)
+
 
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        self.rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
-        self.features = nn.Sequential(*list(self.rawnet.features.children())[:-1])
-        """
-        for param in self.features.parameters():
-            param.requires_grad = False"""
+        rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
+        self.features = nn.Sequential(*list(rawnet.features.children())[:-1])
+
+        # Freezare il primo layer conv
+        self.features[0].weight.requires_grad = False
+        self.features[0].bias.requires_grad = False
 
     def forward(self, input):
         return self.features(input)
@@ -139,33 +142,20 @@ class ObjectDetectionModel(nn.Module):
         return cls_score, bbox
 
     def prediction_img(self, img, rois, ridx):
-        # self.eval()
-        score, tbbox = self(img, rois, ridx)
+        self.eval()
+        with torch.no_grad():
+            score, tbbox = self(img, rois, ridx)
         _, _, heigth, width = img.shape
         score = nn.functional.softmax(score, dim=-1)
         max_score, cls_max_score = torch.max(score, dim=-1)
 
+        bboxs = regr_to_bbox(rois, tbbox, (heigth, width))
 
-        """denormalized_regr = torch.empty_like(tbbox)
-        for class_ind in range(tbbox.shape[1]):
-            if class_ind != 0:
-                mean = torch.tensor(
-                    mean_std_by_class[str(class_ind)]["mean"], device=tbbox.device
-                )
-                std = torch.tensor(
-                    mean_std_by_class[str(class_ind)]["std"], device=tbbox.device
-                )
-                denormalized_regr[:, class_ind, :] = tbbox[:, class_ind, :] * std + mean
-            else:
-                denormalized_regr[:, class_ind, :] = tbbox[:, class_ind, :]"""
-
-
-        bboxs = regr_to_bbox(
-            proposals=rois, regr=tbbox, image_size=(heigth, width)
-        )
-
-        classes = cls_max_score.view(-1, 1, 1).expand(cls_max_score.size(0), 1, 4)
-        bboxs = bboxs.gather(1, classes).squeeze(1)
+        bboxs = bboxs[torch.arange(cls_max_score.shape[0]), cls_max_score]
+        # bboxs = torchvision.ops.clip_boxes_to_image(bboxs, (heigth, width))
+        # bboxs = bboxs.view(-1, (config["global"]["num_classes"] + 1), 4)
+        # classes = cls_max_score.view(-1, 1, 1).expand(cls_max_score.size(0), 1, 4)
+        # bboxs = bboxs.gather(1, classes).squeeze(1)
         return cls_max_score, max_score, bboxs
 
     def calc_loss(
@@ -175,20 +165,25 @@ class ObjectDetectionModel(nn.Module):
         labels,
         gt_bbox,
     ):
-        # self.train()
         cel = nn.CrossEntropyLoss()
-        sl1 = nn.SmoothL1Loss()
+        sl1 = nn.SmoothL1Loss(reduction="none")
         loss_sc = cel(probs, labels)
+        """
         lbl = labels.view(-1, 1, 1).expand(
             labels.size(0), 1, 4
         )  # view --> 128,1,1 expand --> 128, 1, 4
         # ignore background
         mask = (labels != 0).float().view(-1, 1).expand(labels.size(0), 4)
         loss_loc = sl1(bbox.gather(1, lbl).squeeze(1) * mask, gt_bbox * mask)
+        """
+        mask = (labels != 0).bool()
+        t_u = bbox[torch.arange(bbox.shape[0]), labels]
+        loss_loc = (
+            torch.sum(torch.sum(sl1(t_u[mask], gt_bbox[mask]), dim=1), dim=0)
+            / labels.shape[0]
+        )
 
         loss_sc = config["loss"]["lmb_cls"] * loss_sc
         loss_loc = config["loss"]["lmb_loc"] * loss_loc
         loss = loss_sc + loss_loc
         return loss, loss_sc, loss_loc
-
-    
