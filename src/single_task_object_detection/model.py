@@ -1,16 +1,19 @@
 import torchvision
 import torch
 import torch.nn as nn
-from torchvision.models import AlexNet_Weights
+from torchvision.models import AlexNet_Weights, VGG16_Weights
 from config_experiments import config
 from bbox_transform import regr_to_bbox
 import numpy as np
 from sklearn.utils.class_weight import compute_class_weight
 
+
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
+        #rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
+        rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
+        
         self.features = nn.Sequential(*list(rawnet.features.children())[:-1])
 
         # Freezare il primo layer conv
@@ -36,7 +39,7 @@ class ROI_Module(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                256
+                512#256
                 * config["model"]["output_size_roipool"][0]
                 * config["model"]["output_size_roipool"][1],
                 4096,
@@ -105,6 +108,7 @@ class ObjectDetectionModel(nn.Module):
         bboxs = regr_to_bbox(rois, tbbox, (heigth, width))
 
         bboxs = bboxs[torch.arange(cls_max_score.shape[0]), cls_max_score]
+        #bboxs = self.unnormalize_bbox(bboxs)
         return cls_max_score, max_score, bboxs
 
     def calc_loss(
@@ -114,9 +118,13 @@ class ObjectDetectionModel(nn.Module):
         labels,
         gt_bbox,
     ):
-        cel = nn.CrossEntropyLoss(weight=self.get_class_weigths().to(labels.device), label_smoothing=0.1)
+        # cel = nn.CrossEntropyLoss(weight=self.get_class_weigths().to(labels.device), label_smoothing=0.1)
+        cel = nn.CrossEntropyLoss()
+
         sl1 = nn.SmoothL1Loss(reduction="none")
         loss_sc = cel(probs, labels)
+
+        #gt_bbox = self.normalize_bbox(gt_bbox)
         mask = (labels != 0).bool()
         t_u = bbox[torch.arange(bbox.shape[0]), labels]
         loss_loc = (
@@ -129,7 +137,9 @@ class ObjectDetectionModel(nn.Module):
         loss = loss_sc + loss_loc
         return loss, loss_sc, loss_loc
 
-    def get_class_weigths(self,):
+    def get_class_weigths(
+        self,
+    ):
         instances_class = np.concatenate(
             [
                 np.repeat(7, 184),
@@ -155,12 +165,27 @@ class ObjectDetectionModel(nn.Module):
             ]
         )
         class_weights = compute_class_weight(
-            class_weight="balanced", classes=np.unique(instances_class), y=instances_class
+            class_weight="balanced",
+            classes=np.unique(instances_class),
+            y=instances_class,
         )
         class_weights_dict = dict(zip(np.unique(instances_class), class_weights))
         foreground_weight_mean = np.mean(list(class_weights_dict.values()))
         background_weight = foreground_weight_mean / 10
         class_weights_dict[0] = background_weight
-        class_weights_list = [class_weights_dict[i] for i in range(len(class_weights_dict))]
+        class_weights_list = [
+            class_weights_dict[i] for i in range(len(class_weights_dict))
+        ]
         class_weights_tensor = torch.tensor(class_weights_list, dtype=torch.float32)
         return class_weights_tensor
+    """
+    def normalize_bbox(self, bboxes):
+            # Normalizza i target di regressione per avere media 0 e varianza 1
+            self.means = bboxes.mean(dim=0, keepdim=True)
+            self.stds = bboxes.std(dim=0, keepdim=True)
+            normalized_bboxes = (bboxes - self.means) / self.stds
+            return normalized_bboxes
+    
+    def unnormalize_bbox(self, bboxes):
+        unnormalized_bboxes = (bboxes * self.stds) + self.means
+        return unnormalized_bboxes"""

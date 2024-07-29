@@ -6,8 +6,6 @@ from bbox_transform import apply_nms
 from tqdm import tqdm
 import wandb
 import logging
-import yaml
-import os
 
 
 def compute_mAP(data_set, model, device):  # train/val
@@ -15,7 +13,6 @@ def compute_mAP(data_set, model, device):  # train/val
     metric = torchmetrics.classification.MultilabelAveragePrecision(
         num_labels=config["global"]["num_attributes"], average="none", thresholds=None
     ).to(device)
-
     metric.warn_on_many_detections = False
     model.eval()
 
@@ -35,9 +32,10 @@ def compute_mAP(data_set, model, device):  # train/val
             ss_rois = ss_rois.to(device)
             gt_attributes = gt_attributes.to(device)
 
-            #orig_w, orig_h = image_size
-            #new_w, new_h = (image.shape[3], image.shape[2])
-            """gt_bbox = resize_bounding_boxes(
+            # TODO capire se lasciare il resize
+            """orig_w, orig_h = image_size
+            new_w, new_h = (image.shape[3], image.shape[2])
+            gt_bbox = resize_bounding_boxes(
                 gt_bbox, orig_size=(new_w, new_h), new_size=(orig_w, orig_h)
             )"""
 
@@ -53,6 +51,8 @@ def compute_mAP(data_set, model, device):  # train/val
                 indices_batch,
             )
 
+            
+
             pred_attr = pred_attr.to(device)
             pred_score_attr = pred_score_attr.to(device)
 
@@ -60,7 +60,6 @@ def compute_mAP(data_set, model, device):  # train/val
             target = gt_attributes.int()
             mAP = metric(preds, target)
         mAP = metric.compute()
-        
     return mAP
 
 
@@ -76,3 +75,4 @@ def mAP_view_attributes(mAP, data_test):
     logging.info(f"\nmAP : {mAP:.2f}")
 
     wandb.config.update({"mAP_attr@0.50": mAP})
+

@@ -3,6 +3,7 @@ import numpy as np
 import random
 import logging
 
+
 def set_seed(seed):
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -21,9 +22,18 @@ def set_device(idx_gpu=0):
         device = torch.device("cpu")
     return device
 
-def log_dict(d, parent_key=''):
+
+def log_dict(d, parent_key=""):
     for key, value in d.items():
         if isinstance(value, dict):
-            log_dict(value, f'{parent_key}{key}.')
+            log_dict(value, f"{parent_key}{key}.")
         else:
-            logging.info(f'{parent_key}{key}: {value}')
+            logging.info(f"{parent_key}{key}: {value}")
+
+
+def get_map_step(epoch, max_epoch, steps):
+    progress = epoch / max_epoch
+    i = 0
+    while i < (len(steps) - 1) and progress > steps[i]["progress"]:
+        i += 1
+    return steps[i]["step"]

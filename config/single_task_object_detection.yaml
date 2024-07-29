@@ -36,7 +36,7 @@ postprocessing:
 model:
   #load_pretrained_model: "models/object_detection/model_2024-06-15_11-59.pth"
   spatial_scale: 0.0625
-  output_size_roipool: [6, 6]
+  output_size_roipool: [7, 7] # [6,6]
 
 loss:
   lmb_cls: 1.

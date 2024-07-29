@@ -4,7 +4,16 @@ global:
   seed: 42
   num_classes: 20
   num_attributes: 64
-  num_epochs: 50
+  num_epochs: 100
+  metrics_step:
+    - progress: 0.4
+      step: 10
+    - progress: 0.8
+      step: 5
+    - progress: 0.9
+      step: 2
+    - progress: 1.
+      step: 1
 
 transform:
   resize_values: 600 # shortest edge
@@ -27,7 +36,7 @@ postprocessing:
 model:
   #load_pretrained_model: "models/object_detection/model_2024-06-15_11-59.pth"
   spatial_scale: 0.0625
-  output_size_roipool: [6, 6]
+  output_size_roipool: [7, 7] # [6,6]
 
 loss:
   lmb_cls: 1.
@@ -38,6 +47,6 @@ optimizer:
   momentum: 0.9
   weight_decay: 0.0005
   lr_weigth_mult: 1
-  lr_bias_bias: 2
-  sched_step_size: 30
+  lr_bias_mult: 2
+  sched_step_size: 40
   sched_gamma: 0.1

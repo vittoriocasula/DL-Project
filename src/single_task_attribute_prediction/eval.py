@@ -7,8 +7,8 @@ from model import AttributePredictionModel
 from metrics import compute_mAP, mAP_view_attributes
 import wandb
 
-if __name__ == "__main__":
 
+if __name__ == "__main__":
 
     wandb.init(
         group="object_detection",
@@ -29,9 +29,9 @@ if __name__ == "__main__":
     )
     set_seed(config["global"]["seed"])
     device = set_device(config["global"]["gpu_id"])
+
     data_test = VOC08Attr(train=False, transform=transform_test)
     model = AttributePredictionModel().to(device)
-
     model.load_state_dict(torch.load(model_path, map_location=device))
 
     mAP = compute_mAP(data_test, model, device)
