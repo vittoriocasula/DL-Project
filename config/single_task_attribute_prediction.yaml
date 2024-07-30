@@ -1,6 +1,6 @@
 global:
   task: "attribute_prediction"
-  gpu_id: 0
+  gpu_id: 1
   seed: 42
   num_classes: 20
   num_attributes: 64

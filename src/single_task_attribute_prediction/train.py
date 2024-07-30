@@ -227,6 +227,8 @@ if __name__ == "__main__":
     )
 
     for epoch in range(config["global"]["num_epochs"]):
+        mAP_train_dict = compute_mAP(train_data, model, device)  # mAP on train
+
         train_loss_total = train(train_dataloader, model, optimizer, device)
         val_loss_total = eval(val_dataloader, model, device)
         logging.info(
