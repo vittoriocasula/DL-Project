@@ -11,8 +11,8 @@ from sklearn.utils.class_weight import compute_class_weight
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        # rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
-        rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
+        rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
+        # rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
 
         self.features = nn.Sequential(*list(rawnet.features.children())[:-1])
 
@@ -39,7 +39,7 @@ class ROI_Module(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                512  # 256
+                256  # 512
                 * config["model"]["output_size_roipool"][0]
                 * config["model"]["output_size_roipool"][1],
                 4096,
@@ -96,7 +96,7 @@ class AttributePredictionModel(nn.Module):
         with torch.no_grad():
             sc_attr = self(img, rois, ridx)
         score_attr = nn.functional.sigmoid(sc_attr)
-        attr = torch.where(sc_attr > 0.5, torch.tensor(1.0), torch.tensor(0.0))
+        attr = torch.where(score_attr > 0.5, torch.tensor(1.0, device = sc_attr.device), torch.tensor(0.0, device = sc_attr.device))
         return attr, score_attr
 
     def calc_loss(
