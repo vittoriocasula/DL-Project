@@ -12,8 +12,8 @@ import wandb
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
-        # rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
+        #rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
+        rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
 
         self.features = nn.Sequential(*list(rawnet.features.children())[:-1])
 
@@ -40,7 +40,7 @@ class ROI_Module(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                256  # 512
+                512 #256  
                 * config["model"]["output_size_roipool"][0]
                 * config["model"]["output_size_roipool"][1],
                 4096,
@@ -197,9 +197,10 @@ class ObjectDetectionModel(nn.Module):
 class CrossStitchBackbone(
     nn.Module
 ):  # one cross-stitch units after every pooling layer
-    def __init__(self, alex_a, alex_b):
+    def __init__(self, vgg_a, vgg_b):
         super().__init__()
 
+        """
         self.models_a = nn.ModuleList(
             [nn.Sequential(*alex_a[i:j]) for i, j in [(0, 3), (3, 6), (6, 12)]]
         )
@@ -207,6 +208,20 @@ class CrossStitchBackbone(
             [nn.Sequential(*alex_b[i:j]) for i, j in [(0, 3), (3, 6), (6, 12)]]
         )
         self.cross_stitch_units = nn.ModuleList([CrossStitchUnit() for _ in range(3)])
+        """
+
+        # Identify the layers in VGG where pooling occurs
+        # VGG-16 structure: conv -> relu -> conv -> relu -> pool (repeat 5 times)
+        self.models_a = nn.ModuleList(
+            [nn.Sequential(*vgg_a[i:j]) for i, j in [(0, 4), (4, 9), (9, 16), (16, 23), (23, 30)]]
+        )
+        self.models_b = nn.ModuleList(
+            [nn.Sequential(*vgg_b[i:j]) for i, j in [(0, 4), (4, 9), (9, 16), (16, 23), (23, 30)]]
+        )
+
+        # Create CrossStitchUnits for each pooling layer
+        self.cross_stitch_units = nn.ModuleList([CrossStitchUnit() for _ in range(5)])
+
 
     def forward(self, x):
         out_a, out_b = x, x
