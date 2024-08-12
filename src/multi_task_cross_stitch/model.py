@@ -5,14 +5,21 @@ from torchvision.models import AlexNet_Weights, VGG16_Weights
 from config_experiments import config
 from bbox_transform import regr_to_bbox
 import numpy as np
-from sklearn.utils.class_weight import compute_class_weight
+import wandb
+import torchvision
+import torch
+import torch.nn as nn
+from torchvision.models import AlexNet_Weights, VGG16_Weights
+from config_experiments import config
+from bbox_transform import regr_to_bbox
+import numpy as np
 import wandb
 
 
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        #rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
+        # rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
         rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
 
         self.features = nn.Sequential(*list(rawnet.features.children())[:-1])
@@ -37,10 +44,36 @@ class ROI_Module(nn.Module):
             spatial_scale=config["model"]["spatial_scale"],
         )
 
-        self.classifier = nn.Sequential(
+    def forward(self, features, rois, ridx):
+        idx_rois = torch.cat(
+            (ridx, rois), dim=-1
+        )  # create matrix with (batch_idx, rois(xyxy))
+        res = self.roipool(features, idx_rois)
+        res = res.view(res.size(0), -1)
+        return res
+
+
+class CrossStitchClassifier(nn.Module):
+    def __init__(self):
+        super(CrossStitchClassifier, self).__init__()
+
+        self.branch_a = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                512 #256  
+                512  # 256
+                * config["model"]["output_size_roipool"][0]
+                * config["model"]["output_size_roipool"][1],
+                4096,
+            ),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+        )
+        self.branch_b = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(
+                512  # 256
                 * config["model"]["output_size_roipool"][0]
                 * config["model"]["output_size_roipool"][1],
                 4096,
@@ -51,14 +84,18 @@ class ROI_Module(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def forward(self, features, rois, ridx):
-        idx_rois = torch.cat(
-            (ridx, rois), dim=-1
-        )  # create matrix with (batch_idx, rois(xyxy))
-        res = self.roipool(features, idx_rois)
-        res = res.view(res.size(0), -1)
-        feat = self.classifier(res)
-        return feat
+        self.cross_stitch_1 = CrossStitchUnit()
+        self.cross_stitch_2 = CrossStitchUnit()
+
+    def forward(self, x_a, x_b):
+
+        x_a = self.branch_a[0:4](x_a)
+        x_b = self.branch_b[0:4](x_b)
+        x_a, x_b = self.cross_stitch_1(x_a, x_b)
+        x_a = self.branch_a[4:](x_a)
+        x_b = self.branch_b[4:](x_b)
+        x_a, x_b = self.cross_stitch_2(x_a, x_b)
+        return x_a, x_b
 
 
 class AttributePredictionHead(nn.Module):
@@ -213,15 +250,20 @@ class CrossStitchBackbone(
         # Identify the layers in VGG where pooling occurs
         # VGG-16 structure: conv -> relu -> conv -> relu -> pool (repeat 5 times)
         self.models_a = nn.ModuleList(
-            [nn.Sequential(*vgg_a[i:j]) for i, j in [(0, 4), (4, 9), (9, 16), (16, 23), (23, 30)]]
+            [
+                nn.Sequential(*vgg_a[i:j])
+                for i, j in [(0, 5), (5, 10), (10, 17), (17, 24), (24, 30)]
+            ]
         )
         self.models_b = nn.ModuleList(
-            [nn.Sequential(*vgg_b[i:j]) for i, j in [(0, 4), (4, 9), (9, 16), (16, 23), (23, 30)]]
+            [
+                nn.Sequential(*vgg_b[i:j])
+                for i, j in [(0, 5), (5, 10), (10, 17), (17, 24), (24, 30)]
+            ]
         )
 
         # Create CrossStitchUnits for each pooling layer
         self.cross_stitch_units = nn.ModuleList([CrossStitchUnit() for _ in range(5)])
-
 
     def forward(self, x):
         out_a, out_b = x, x
@@ -263,16 +305,16 @@ class CrossStitchUnit(nn.Module):
 
 
 class CrossStitchNet(nn.Module):
-    def __init__(
-        self,
-    ):
+    def __init__(self, alex_a, alex_b):
         super().__init__()
-
-        alex_a = Backbone()
-        alex_b = Backbone()
+        if alex_a is None or alex_b is None:
+            alex_a = Backbone()
+            alex_b = Backbone()
         self.cross_stitch_net = CrossStitchBackbone(alex_a.features, alex_b.features)
         self.roi_a = ROI_Module()
         self.roi_b = ROI_Module()
+
+        self.cross_stitch_classifier = CrossStitchClassifier()
 
         self.model_obj_detect = ObjectDetectionHead(
             num_classes=config["global"]["num_classes"]
@@ -285,6 +327,7 @@ class CrossStitchNet(nn.Module):
         out_a, out_b = self.cross_stitch_net(x)
         out_a = self.roi_a(out_a, rois, ridx)
         out_b = self.roi_b(out_b, rois, ridx)
+        out_a, out_b = self.cross_stitch_classifier(out_a, out_b)
         cls_score, bbox = self.model_obj_detect(out_a)
         attr_score = self.model_attribute(out_b)
         return cls_score, bbox, attr_score  # cls_score, bbox, attr_score
@@ -292,7 +335,7 @@ class CrossStitchNet(nn.Module):
     def prediction_img(self, img, rois, ridx):
         self.eval()
         with torch.no_grad():
-            score, tbbox,_ = self(img, rois, ridx)
+            score, tbbox, _ = self(img, rois, ridx)
         _, _, heigth, width = img.shape
         score = nn.functional.softmax(score, dim=-1)
         max_score, cls_max_score = torch.max(score, dim=-1)
@@ -306,9 +349,13 @@ class CrossStitchNet(nn.Module):
     def prediction_rois(self, img, rois, ridx):
         self.eval()
         with torch.no_grad():
-            _,_,sc_attr = self(img, rois, ridx)
+            _, _, sc_attr = self(img, rois, ridx)
         score_attr = nn.functional.sigmoid(sc_attr)
-        attr = torch.where(score_attr > 0.5, torch.tensor(1.0, device = sc_attr.device), torch.tensor(0.0, device = sc_attr.device))
+        attr = torch.where(
+            score_attr > 0.5,
+            torch.tensor(1.0, device=sc_attr.device),
+            torch.tensor(0.0, device=sc_attr.device),
+        )
         return attr, score_attr
 
     def calc_loss(

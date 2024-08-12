@@ -1,11 +1,12 @@
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 
 from config_experiments import config
 from dataloader import VOC08Attr
-from model import CrossStitchNet
-from utils import set_seed, set_device, log_dict, get_map_step
+from model import CrossStitchNet, ObjectDetectionModel, AttributePredictionModel
+from utils import set_seed, set_device, log_dict, get_map_step, copy_weights
 
 from metrics import (
     compute_mAP_obj_detect,
@@ -168,7 +169,7 @@ if __name__ == "__main__":
         project="DL",
         config=config,
         save_code=True,
-        #mode="disabled",
+        # mode="disabled",
     )
     wandb.config.update({"experiment_current_time": current_time})
 
@@ -218,15 +219,50 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
-    # model
-    model = CrossStitchNet().to(device)
     if config["model"].get("load_pretrained_model"):
+        model = CrossStitchNet().to(device)
         logging.info("load %s\n" % config["model"]["load_pretrained_model"])
         model.load_state_dict(torch.load(config["model"]["load_pretrained_model"]))
     else:
-        logging.info(
-            "Pretrained models not provided. Uncomment load_pretrained_model in YAML file and insert model's path or the model will be randomly initialized."
-        )
+        if config["model"]["single_task_init"]:
+            path_best_model_obj = config["model"]["model_obj"]
+            path_best_model_attr = config["model"]["model_attr"]
+            model_obj = ObjectDetectionModel().to(device)
+            model_attr = AttributePredictionModel().to(device)
+            model_obj.load_state_dict(
+                torch.load(path_best_model_obj, map_location=device)
+            )
+            model_attr.load_state_dict(
+                torch.load(path_best_model_attr, map_location=device)
+            )
+            model = CrossStitchNet(model_obj.alex, model_attr.alex).to(device)
+
+            """for model_a, model_b in zip(
+                model.cross_stitch_net.models_a, model.cross_stitch_net.models_b
+            ):
+                copy_weights(model_obj.alex.features, model_a)
+                copy_weights(model_attr.alex.features, model_b)"""
+
+            # model.cross_stitch_net.models_a.load_state_dict(model_obj.alex.features.state_dict())
+            # model.cross_stitch_net.models_b.load_state_dict(model_attr.alex.features.state_dict())
+
+            model.roi_a.load_state_dict(model_obj.roi_module.state_dict())
+            model.roi_b.load_state_dict(model_attr.roi_module.state_dict())
+
+            model.model_obj_detect.load_state_dict(
+                model_obj.obj_detect_head.state_dict()
+            )
+            model.model_attribute.load_state_dict(
+                model_attr.attribute_head.state_dict()
+            )
+        else:
+            model = CrossStitchNet(
+                ObjectDetectionModel().to(device).alex,
+                AttributePredictionModel().to(device).alex,
+            ).to(device)
+            logging.info(
+                "Pretrained models not provided. Uncomment load_pretrained_model in YAML file and insert model's path or the model will be randomly initialized."
+            )
 
     # optimizer
     params = []

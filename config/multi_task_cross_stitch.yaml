@@ -1,6 +1,6 @@
 global:
   task: "cross_stitch"
-  gpu_id: 0
+  gpu_id: 1
   seed: 42
   num_classes: 20
   num_attributes: 64
@@ -35,6 +35,9 @@ postprocessing:
 
 model:
   #load_pretrained_model: "models/object_detection/model_2024-06-15_11-59.pth"
+  single_task_init: False
+  model_obj: "experiments/object_detection/2024-07-28_19-23-43/models/best_model_epoch_94.pth"
+  model_attr: "experiments/attribute_prediction/2024-07-29_17-54-07/models/best_model_epoch_20.pth"
   spatial_scale: 0.0625
   output_size_roipool: [7, 7] # [6,6]
 

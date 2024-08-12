@@ -37,3 +37,20 @@ def get_map_step(epoch, max_epoch, steps):
     while i < (len(steps) - 1) and progress > steps[i]["progress"]:
         i += 1
     return steps[i]["step"]
+
+
+def copy_weights(src_layers, dst_layers):
+    src_idx = 0
+    dst_idx = 0
+    while src_idx < len(src_layers) and dst_idx < len(dst_layers):
+        if isinstance(dst_layers[dst_idx], torch.nn.Conv2d):
+            if isinstance(src_layers[src_idx], torch.nn.Conv2d):
+                dst_layers[dst_idx].weight.data = src_layers[
+                    src_idx
+                ].weight.data.clone()
+                if src_layers[src_idx].bias is not None:
+                    dst_layers[dst_idx].bias.data = src_layers[
+                        src_idx
+                    ].bias.data.clone()
+            src_idx += 1
+        dst_idx += 1

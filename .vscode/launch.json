@@ -29,6 +29,15 @@
       "args": ["--config", "config/multi_task_cross_stitch.yaml"]
     },
     {
+      "name": "Debugger untitle-1.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "src/multi_task_cross_stitch/Untitled-1.py",
+      "console": "integratedTerminal",
+      "args": ["--config", "config/multi_task_cross_stitch.yaml"]
+    }
+    ,
+    {
       "name": "Debugger single_task_object_detection/eval.py",
       "type": "debugpy",
       "request": "launch",
