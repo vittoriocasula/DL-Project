@@ -6,7 +6,13 @@ import torchvision.transforms as transforms
 from config_experiments import config
 from dataloader import VOC08Attr
 from model import CrossStitchNet, ObjectDetectionModel, AttributePredictionModel
-from utils import set_seed, set_device, log_dict, get_map_step, copy_weights
+from utils import (
+    set_seed,
+    set_device,
+    log_dict,
+    get_map_step,
+    map_layers_for_init_single_task,
+)
 
 from metrics import (
     compute_mAP_obj_detect,
@@ -219,6 +225,8 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
+    # model
+
     if config["model"].get("load_pretrained_model"):
         model = CrossStitchNet().to(device)
         logging.info("load %s\n" % config["model"]["load_pretrained_model"])
@@ -229,36 +237,30 @@ if __name__ == "__main__":
             path_best_model_attr = config["model"]["model_attr"]
             model_obj = ObjectDetectionModel().to(device)
             model_attr = AttributePredictionModel().to(device)
-            model_obj.load_state_dict(
-                torch.load(path_best_model_obj, map_location=device)
-            )
-            model_attr.load_state_dict(
-                torch.load(path_best_model_attr, map_location=device)
-            )
-            model = CrossStitchNet(model_obj.alex, model_attr.alex).to(device)
+            model = CrossStitchNet(model_obj.backbone, model_attr.backbone).to(device)
+            model_obj = torch.load(path_best_model_obj, map_location=device)
+            model_attr = torch.load(path_best_model_attr, map_location=device)
 
-            """for model_a, model_b in zip(
-                model.cross_stitch_net.models_a, model.cross_stitch_net.models_b
-            ):
-                copy_weights(model_obj.alex.features, model_a)
-                copy_weights(model_attr.alex.features, model_b)"""
-
-            # model.cross_stitch_net.models_a.load_state_dict(model_obj.alex.features.state_dict())
-            # model.cross_stitch_net.models_b.load_state_dict(model_attr.alex.features.state_dict())
-
-            model.roi_a.load_state_dict(model_obj.roi_module.state_dict())
-            model.roi_b.load_state_dict(model_attr.roi_module.state_dict())
-
-            model.model_obj_detect.load_state_dict(
-                model_obj.obj_detect_head.state_dict()
+            mapping_obj, mapping_attr = map_layers_for_init_single_task(
+                config["model"]["backbone"]
             )
-            model.model_attribute.load_state_dict(
-                model_attr.attribute_head.state_dict()
-            )
+
+            # Copia dei pesi per il task di object detection
+            for name, param in model.named_parameters():
+                if name in mapping_obj:
+                    source_name = mapping_obj[name]
+                    param.data.copy_(model_obj[source_name].data)
+
+            # Copia dei pesi per il task di attribute classification
+            for name, param in model.named_parameters():
+                if name in mapping_attr:
+                    source_name = mapping_attr[name]
+                    param.data.copy_(model_attr[source_name].data)
+
         else:
             model = CrossStitchNet(
-                ObjectDetectionModel().to(device).alex,
-                AttributePredictionModel().to(device).alex,
+                ObjectDetectionModel().to(device).backbone,
+                AttributePredictionModel().to(device).backbone,
             ).to(device)
             logging.info(
                 "Pretrained models not provided. Uncomment load_pretrained_model in YAML file and insert model's path or the model will be randomly initialized."
@@ -373,8 +375,8 @@ if __name__ == "__main__":
             model_path = os.path.join(path_models, f"model_epoch_{epoch+1}.pth")
             torch.save(model.state_dict(), model_path)
 
-            # prossisoriamente cerchiamo di aumentare le performance dell'object detector
-            mAP_val = mAP_val_obj
+            #  cerchiamo di aumentare le performance di entrambi i task
+            mAP_val = (mAP_val_obj + mAP_val_attr) / 2
 
             if mAP_val > best_mAP:
                 best_model_weights = model.state_dict()
@@ -406,6 +408,6 @@ if __name__ == "__main__":
     torch.save(best_model_weights, f"{path_models}best_model_epoch_{best_epoch}.pth")
 
     view_mAP_for_class(best_mAP_dict_obj, val_data)
-    mAP_view_attributes(mAP_val_dict_attr, val_data)
+    mAP_view_attributes(best_mAP_dict_attr, val_data)
 
     wandb.finish()

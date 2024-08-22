@@ -6,25 +6,28 @@ from config_experiments import config
 from bbox_transform import regr_to_bbox
 import numpy as np
 import wandb
-import torchvision
-import torch
-import torch.nn as nn
-from torchvision.models import AlexNet_Weights, VGG16_Weights
-from config_experiments import config
-from bbox_transform import regr_to_bbox
-import numpy as np
-import wandb
 
 
 class Backbone(nn.Module):
-    def __init__(self):
+    def __init__(self, model_type=config["model"]["backbone"]):
         super(Backbone, self).__init__()
-        # rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
-        rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
+
+        if model_type == "alexnet":
+            rawnet = torchvision.models.alexnet(
+                weights=torchvision.models.AlexNet_Weights.DEFAULT
+            )
+        elif model_type == "vgg16":
+            rawnet = torchvision.models.vgg16(
+                weights=torchvision.models.VGG16_Weights.DEFAULT
+            )
+        else:
+            raise ValueError(
+                "Model type not supported. Choose between 'alexnet' and 'vgg16'."
+            )
 
         self.features = nn.Sequential(*list(rawnet.features.children())[:-1])
 
-        # Freezare il primo layer conv
+        # Freeza il primo layer conv
         self.features[0].weight.requires_grad = False
         self.features[0].bias.requires_grad = False
 
@@ -53,6 +56,20 @@ class ROI_Module(nn.Module):
         return res
 
 
+class CrossStitchROI_Module(nn.Module):
+    def __init__(self, roi_a, roi_b):
+        super(CrossStitchROI_Module, self).__init__()
+        self.roi_a = roi_a
+        self.roi_b = roi_b
+        self.cs = CrossStitchUnit()
+
+    def forward(self, x_a, x_b, rois, ridx):
+        x_a = self.roi_a(x_a, rois, ridx)
+        x_b = self.roi_b(x_b, rois, ridx)
+        x_a, x_b = self.cs(x_a, x_b)
+        return x_a, x_b
+
+
 class CrossStitchClassifier(nn.Module):
     def __init__(self):
         super(CrossStitchClassifier, self).__init__()
@@ -60,7 +77,7 @@ class CrossStitchClassifier(nn.Module):
         self.branch_a = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                512  # 256
+                config["model"]["n_unit_classifier"]
                 * config["model"]["output_size_roipool"][0]
                 * config["model"]["output_size_roipool"][1],
                 4096,
@@ -73,7 +90,7 @@ class CrossStitchClassifier(nn.Module):
         self.branch_b = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                512  # 256
+                config["model"]["n_unit_classifier"]
                 * config["model"]["output_size_roipool"][0]
                 * config["model"]["output_size_roipool"][1],
                 4096,
@@ -117,14 +134,14 @@ class AttributePredictionModel(nn.Module):
         self,
     ):
         super().__init__()
-        self.alex = Backbone()
+        self.backbone = Backbone()
         self.roi_module = ROI_Module()
         self.attribute_head = AttributePredictionHead(
             num_attributes=config["global"]["num_attributes"]
         )
 
     def forward(self, x, rois, ridx):
-        out = self.alex(x)
+        out = self.backbone(x)
         out = self.roi_module(out, rois, ridx)
         score_attr = self.attribute_head(out)
         return score_attr
@@ -180,14 +197,14 @@ class ObjectDetectionModel(nn.Module):
         self,
     ):
         super().__init__()
-        self.alex = Backbone()
+        self.backbone = Backbone()
         self.roi_module = ROI_Module()
         self.obj_detect_head = ObjectDetectionHead(
             num_classes=config["global"]["num_classes"]
         )
 
     def forward(self, x, rois, ridx):
-        out = self.alex(x)
+        out = self.backbone(x)
         out = self.roi_module(out, rois, ridx)
         cls_score, bbox = self.obj_detect_head(out)
         return cls_score, bbox
@@ -231,47 +248,41 @@ class ObjectDetectionModel(nn.Module):
         return loss, loss_sc, loss_loc
 
 
-class CrossStitchBackbone(
-    nn.Module
-):  # one cross-stitch units after every pooling layer
-    def __init__(self, vgg_a, vgg_b):
+class CrossStitchBackbone(nn.Module):
+    def __init__(self, backbone_a, backbone_b, model_type=config["model"]["backbone"]):
         super().__init__()
 
-        """
-        self.models_a = nn.ModuleList(
-            [nn.Sequential(*alex_a[i:j]) for i, j in [(0, 3), (3, 6), (6, 12)]]
-        )
-        self.models_b = nn.ModuleList(
-            [nn.Sequential(*alex_b[i:j]) for i, j in [(0, 3), (3, 6), (6, 12)]]
-        )
-        self.cross_stitch_units = nn.ModuleList([CrossStitchUnit() for _ in range(3)])
-        """
+        if model_type == "alexnet":
+            cs_position = [(0, 3), (3, 6), (6, 12)]
 
-        # Identify the layers in VGG where pooling occurs
-        # VGG-16 structure: conv -> relu -> conv -> relu -> pool (repeat 5 times)
+        elif model_type == "vgg16":
+            cs_position = [(0, 5), (5, 10), (10, 17), (17, 24), (24, 30)]
+
         self.models_a = nn.ModuleList(
-            [
-                nn.Sequential(*vgg_a[i:j])
-                for i, j in [(0, 5), (5, 10), (10, 17), (17, 24), (24, 30)]
-            ]
+            [nn.Sequential(*backbone_a[i:j]) for i, j in cs_position]
         )
         self.models_b = nn.ModuleList(
-            [
-                nn.Sequential(*vgg_b[i:j])
-                for i, j in [(0, 5), (5, 10), (10, 17), (17, 24), (24, 30)]
-            ]
+            [nn.Sequential(*backbone_b[i:j]) for i, j in cs_position]
         )
 
         # Create CrossStitchUnits for each pooling layer
-        self.cross_stitch_units = nn.ModuleList([CrossStitchUnit() for _ in range(5)])
+        self.cross_stitch_units = nn.ModuleList(
+            [CrossStitchUnit() for _ in range(len(cs_position) - 1)]
+        )
 
     def forward(self, x):
         out_a, out_b = x, x
+
+        # Apply all but the last cross-stitch unit
         for model_a, model_b, cross_stitch in zip(
-            self.models_a, self.models_b, self.cross_stitch_units
+            self.models_a[:-1], self.models_b[:-1], self.cross_stitch_units
         ):
             out_a, out_b = model_a(out_a), model_b(out_b)
             out_a, out_b = cross_stitch(out_a, out_b)
+
+        # Apply the last part of the models without a cross-stitch unit
+        out_a, out_b = self.models_a[-1](out_a), self.models_b[-1](out_b)
+
         return out_a, out_b
 
 
@@ -305,14 +316,13 @@ class CrossStitchUnit(nn.Module):
 
 
 class CrossStitchNet(nn.Module):
-    def __init__(self, alex_a, alex_b):
+    def __init__(self, backbone_a, backbone_b):
         super().__init__()
-        if alex_a is None or alex_b is None:
-            alex_a = Backbone()
-            alex_b = Backbone()
-        self.cross_stitch_net = CrossStitchBackbone(alex_a.features, alex_b.features)
+        self.cross_stitch_net = CrossStitchBackbone(backbone_a.features, backbone_b.features)
         self.roi_a = ROI_Module()
         self.roi_b = ROI_Module()
+
+        self.cs_roi = CrossStitchROI_Module(self.roi_a, self.roi_b)
 
         self.cross_stitch_classifier = CrossStitchClassifier()
 
@@ -325,8 +335,7 @@ class CrossStitchNet(nn.Module):
 
     def forward(self, x, rois, ridx):
         out_a, out_b = self.cross_stitch_net(x)
-        out_a = self.roi_a(out_a, rois, ridx)
-        out_b = self.roi_b(out_b, rois, ridx)
+        out_a, out_b = self.cs_roi(out_a, out_b, rois, ridx)
         out_a, out_b = self.cross_stitch_classifier(out_a, out_b)
         cls_score, bbox = self.model_obj_detect(out_a)
         attr_score = self.model_attribute(out_b)
@@ -393,6 +402,6 @@ class CrossStitchNet(nn.Module):
 
         loss = loss_sc + loss_loc
 
-        loss = loss_sc + loss_loc + loss_attr  # METTI LA COSTANTE DAVANTI A LOSS_ATTR
+        loss = loss_sc + loss_loc + loss_attr
 
         return loss, loss_sc, loss_loc, loss_attr
