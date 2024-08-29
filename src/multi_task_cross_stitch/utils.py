@@ -172,3 +172,12 @@ def map_layers_for_init_single_task(backbone):
             "model_attribute.attr_score.bias": "attribute_head.attr_score.bias",
         }
     return mapping_obj, mapping_attr
+
+
+def get_task_to_improve(config, mAP_val_obj, mAP_val_attr):
+    if config["cross_stitch"]["task_to_improve"]== "both":
+        return (mAP_val_obj + mAP_val_attr) / 2
+    if config["cross_stitch"]["task_to_improve"]== "obj":
+        return mAP_val_obj
+    if config["cross_stitch"]["task_to_improve"]== "attr":
+        return mAP_val_attr

@@ -12,6 +12,7 @@ from utils import (
     log_dict,
     get_map_step,
     map_layers_for_init_single_task,
+    get_task_to_improve
 )
 
 from metrics import (
@@ -28,7 +29,7 @@ import datetime
 import logging
 
 
-def train(data_loader, model, optimizer, device):
+def train(data_loader, model, optimizer, cross_stitch_optimizer, device):
     model.train()
 
     losses_total = []
@@ -60,8 +61,10 @@ def train(data_loader, model, optimizer, device):
         )
 
         optimizer.zero_grad()
+        cross_stitch_optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()
+        cross_stitch_optimizer.step()
 
         losses_total.append(total_loss)
         losses_cls.append(loss_cls)
@@ -175,7 +178,7 @@ if __name__ == "__main__":
         project="DL",
         config=config,
         save_code=True,
-        # mode="disabled",
+        #mode="disabled",
     )
     wandb.config.update({"experiment_current_time": current_time})
 
@@ -266,16 +269,15 @@ if __name__ == "__main__":
                 "Pretrained models not provided. Uncomment load_pretrained_model in YAML file and insert model's path or the model will be randomly initialized."
             )
 
-    # optimizer
+    # Lista dei parametri per i due ottimizzatori
     params = []
     cross_stitch_params = []
 
+    # Assegna i parametri ai rispettivi gruppi
     for name, param in model.named_parameters():
         if "alfa_a" in name or "alfa_b" in name:
-            cross_stitch_params.append(
-                {"params": param, "lr": config["cross_stitch"]["lr_cross_stitch"]}
-            )
-        if "weight" in name:
+            cross_stitch_params.append(param)
+        elif "weight" in name:
             params.append(
                 {
                     "params": param,
@@ -294,17 +296,18 @@ if __name__ == "__main__":
                 }
             )
 
+    # Ottimizzatore per i parametri standard del modello
     optimizer = torch.optim.SGD(
         params,
+        lr=config["optimizer"]["lr_global"],
         momentum=config["optimizer"]["momentum"],
     )
-    for param_group in cross_stitch_params:
-        optimizer.add_param_group(
-            {
-                "params": param_group["params"],
-                "lr": config["cross_stitch"]["lr_cross_stitch"],
-            }
-        )
+
+    # Ottimizzatore per i parametri cross-stitch
+    cross_stitch_optimizer = torch.optim.SGD(
+        [{"params": cross_stitch_params, "lr": config["cross_stitch"]["lr_cross_stitch"]}],
+        momentum=0.0,  # senza momentum
+    )
 
     # training loop
     best_mAP = 0.0
@@ -319,7 +322,7 @@ if __name__ == "__main__":
 
     for epoch in range(config["global"]["num_epochs"]):
         train_loss_total, train_loss_class, train_loss_loc, train_loss_attr = train(
-            train_dataloader, model, optimizer, device
+            train_dataloader, model, optimizer, cross_stitch_optimizer, device
         )
         val_loss_total, val_loss_class, val_loss_loc, val_loss_attr = eval(
             val_dataloader, model, device
@@ -350,7 +353,7 @@ if __name__ == "__main__":
             mAP_val_attr = torch.mean(mAP_val_dict_attr).item()
 
             logging.info(
-                f"[Epoch {epoch+1}]\tTRAIN: total_loss = {train_loss_total:.4f} loss_cls = {train_loss_class:.4f} loss_loc = {train_loss_loc:.4f} \tVAL: total_loss val= {val_loss_total:.4f} loss_cls = {val_loss_class:.4f} loss_loc = {val_loss_loc:.4f} \t mAP_train_obj: {mAP_train_obj*100:.2f} mAP_val_obj: {mAP_val_obj*100:.2f} mAP_train_attr: {mAP_train_attr*100:.2f} mAP_val_attr: {mAP_val_attr*100:.2f}"
+                f"[Epoch {epoch+1}]\tTRAIN: total_loss = {train_loss_total:.4f} loss_cls = {train_loss_class:.4f} loss_loc = {train_loss_loc:.4f} loss_attr = {train_loss_attr:.4f} \tVAL: total_loss val= {val_loss_total:.4f} loss_cls = {val_loss_class:.4f} loss_loc = {val_loss_loc:.4f} loss_attr = {val_loss_attr:.4f} \t mAP_train_obj: {mAP_train_obj*100:.2f} mAP_val_obj: {mAP_val_obj*100:.2f} mAP_train_attr: {mAP_train_attr*100:.2f} mAP_val_attr: {mAP_val_attr*100:.2f}"
             )
 
             wandb.log(
@@ -375,8 +378,8 @@ if __name__ == "__main__":
             model_path = os.path.join(path_models, f"model_epoch_{epoch+1}.pth")
             torch.save(model.state_dict(), model_path)
 
-            #  cerchiamo di aumentare le performance di entrambi i task
-            mAP_val = (mAP_val_obj + mAP_val_attr) / 2
+            #  both, obj, attr
+            mAP_val = get_task_to_improve(config, mAP_val_obj, mAP_val_attr)
 
             if mAP_val > best_mAP:
                 best_model_weights = model.state_dict()
