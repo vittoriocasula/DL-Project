@@ -42,13 +42,6 @@ def bbox_offset(proposals, assigned_bb):
     offset_w = torch.log((assigned_bb[:, 2]) / (proposals[:, 2]))
     offset_h = torch.log((assigned_bb[:, 3]) / (proposals[:, 3]))
 
-    """
-    offset_x = (assigned_bb[:, 0] - proposals[:, 0]) / (proposals[:, 2] + eps)
-    offset_y = (assigned_bb[:, 1] - proposals[:, 1]) / (proposals[:, 3] + eps)
-    offset_w = torch.log((assigned_bb[:, 2] + eps) / (proposals[:, 2] + eps))
-    offset_h = torch.log((assigned_bb[:, 3] + eps) / (proposals[:, 3] + eps))
-    """
-
     offset = torch.stack([offset_x, offset_y, offset_w, offset_h], dim=1)
 
     return offset

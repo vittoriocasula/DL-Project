@@ -152,10 +152,6 @@ class ObjectDetectionModel(nn.Module):
         bboxs = regr_to_bbox(rois, tbbox, (heigth, width))
 
         bboxs = bboxs[torch.arange(cls_max_score.shape[0]), cls_max_score]
-        # bboxs = torchvision.ops.clip_boxes_to_image(bboxs, (heigth, width))
-        # bboxs = bboxs.view(-1, (config["global"]["num_classes"] + 1), 4)
-        # classes = cls_max_score.view(-1, 1, 1).expand(cls_max_score.size(0), 1, 4)
-        # bboxs = bboxs.gather(1, classes).squeeze(1)
         return cls_max_score, max_score, bboxs
 
     def calc_loss(
@@ -168,14 +164,7 @@ class ObjectDetectionModel(nn.Module):
         cel = nn.CrossEntropyLoss()
         sl1 = nn.SmoothL1Loss(reduction="none")
         loss_sc = cel(probs, labels)
-        """
-        lbl = labels.view(-1, 1, 1).expand(
-            labels.size(0), 1, 4
-        )  # view --> 128,1,1 expand --> 128, 1, 4
-        # ignore background
-        mask = (labels != 0).float().view(-1, 1).expand(labels.size(0), 4)
-        loss_loc = sl1(bbox.gather(1, lbl).squeeze(1) * mask, gt_bbox * mask)
-        """
+
         mask = (labels != 0).bool()
         t_u = bbox[torch.arange(bbox.shape[0]), labels]
         loss_loc = (

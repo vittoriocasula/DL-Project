@@ -11,8 +11,8 @@ from sklearn.utils.class_weight import compute_class_weight
 class Backbone(nn.Module):
     def __init__(self):
         super(Backbone, self).__init__()
-        rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
-        # rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
+        #rawnet = torchvision.models.alexnet(weights=AlexNet_Weights.DEFAULT)
+        rawnet = torchvision.models.vgg16(weights=VGG16_Weights.DEFAULT)
 
         self.features = nn.Sequential(*list(rawnet.features.children())[:-1])
 
@@ -39,7 +39,7 @@ class ROI_Module(nn.Module):
         self.classifier = nn.Sequential(
             nn.Dropout(),
             nn.Linear(
-                256  # 512
+                512 # 256
                 * config["model"]["output_size_roipool"][0]
                 * config["model"]["output_size_roipool"][1],
                 4096,

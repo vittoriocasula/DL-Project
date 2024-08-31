@@ -129,7 +129,7 @@ if __name__ == "__main__":
         project="DL",
         config=config,
         save_code=True,
-        #mode="disabled",
+        mode="disabled",
     )
     wandb.config.update({"experiment_current_time": current_time})
 

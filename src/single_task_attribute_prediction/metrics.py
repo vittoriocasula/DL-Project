@@ -32,13 +32,6 @@ def compute_mAP(data_set, model, device):  # train/val
             ss_rois = ss_rois.to(device)
             gt_attributes = gt_attributes.to(device)
 
-            # TODO capire se lasciare il resize
-            """orig_w, orig_h = image_size
-            new_w, new_h = (image.shape[3], image.shape[2])
-            gt_bbox = resize_bounding_boxes(
-                gt_bbox, orig_size=(new_w, new_h), new_size=(orig_w, orig_h)
-            )"""
-
             indices_batch = data_set.get_indices_batch(
                 image.shape[0], gt_bbox.shape[0]
             ).unsqueeze(-1)

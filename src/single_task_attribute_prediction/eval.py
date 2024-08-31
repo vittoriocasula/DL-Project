@@ -5,18 +5,9 @@ from dataloader import VOC08Attr
 import torchvision.transforms as transforms
 from model import AttributePredictionModel
 from metrics import compute_mAP, mAP_view_attributes
-import wandb
-
 
 if __name__ == "__main__":
 
-    wandb.init(
-        group="object_detection",
-        project="DL",
-        config=config,
-        save_code=True,
-        mode="disabled",
-    )
     model_path = parse_args().model_path
     transform_test = transforms.Compose(
         [
