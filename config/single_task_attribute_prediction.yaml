@@ -34,7 +34,6 @@ postprocessing:
   score_threshold: 0.05
 
 model:
-  #load_pretrained_model: "models/object_detection/model_2024-06-15_11-59.pth"
   spatial_scale: 0.0625
   output_size_roipool: [7, 7]
   # output_size_roipool = [6,6] # if backbone is Alexnet

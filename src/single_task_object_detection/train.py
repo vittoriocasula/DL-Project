@@ -200,13 +200,6 @@ if __name__ == "__main__":
 
     # model
     model = ObjectDetectionModel().to(device)
-    if config["model"].get("load_pretrained_model"):
-        logging.info("load %s\n" % config["model"]["load_pretrained_model"])
-        model.load_state_dict(torch.load(config["model"]["load_pretrained_model"]))
-    else:
-        logging.info(
-            "Pretrained models not provided. Uncomment load_pretrained_model in YAML file and insert model's path or the model will be randomly initialized."
-        )
 
     # optimizer
     params = []

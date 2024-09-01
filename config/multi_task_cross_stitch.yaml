@@ -50,7 +50,6 @@ model:
   model_attr: "experiments/attribute_prediction/2024-07-29_17-54-07/models/best_model_epoch_20.pth"
 
   spatial_scale: 0.0625
-  #load_pretrained_model: "models/object_detection/model_2024-06-15_11-59.pth"
 
 loss:
   lmb_cls: 1.
